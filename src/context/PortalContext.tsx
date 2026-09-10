@@ -63,6 +63,7 @@ interface PortalContextType {
 
   // Actions
   addCompany: (payload: ComprehensiveCompanyPayload) => void;
+  deleteCompany: (id: string) => void;
   toggleCompanyStatus: (id: string, status: Company['status']) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
   markAttendance: (roundId: string, sapId: string, method?: string) => { success: boolean; message: string };
@@ -82,7 +83,7 @@ const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentRole, setCurrentRole] = useState<UserRole>('PLACEMENT_OFFICER');
-  const [activeTab, setActiveTab] = useState<string>('spr-rotation');
+  const [activeTab, setActiveTab] = useState<string>('command-center');
 
   const [students, setStudents] = useState<Student[]>(() => {
     const saved = localStorage.getItem('upes_students');
@@ -190,6 +191,18 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     // Note: Creating a company ONLY creates the company profile & drive eligibility.
     // Rounds are NOT created automatically and must be added manually from the Rounds section.
     addAuditLog('CREATE_COMPANY', `Added company profile for ${payload.name}.`);
+  };
+
+  const deleteCompany = (id: string) => {
+    const target = companies.find((c) => c.id === id);
+    const compName = target ? target.name : id;
+
+    setCompanies((prev) => prev.filter((c) => c.id !== id));
+    setDrives((prev) => prev.filter((d) => d.companyId !== id && d.companyName !== compName));
+    setRounds((prev) => prev.filter((r) => r.companyId !== id && r.companyName !== compName));
+    setRoundStudents((prev) => prev.filter((rs) => !rs.roundId.includes(id)));
+
+    addAuditLog('DELETE_COMPANY', `Deleted company profile and active processes for ${compName}.`);
   };
 
   const toggleCompanyStatus = (id: string, status: Company['status']) => {
@@ -503,6 +516,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         auditLogs,
         notifications,
         addCompany,
+        deleteCompany,
         toggleCompanyStatus,
         createRound,
         markAttendance,

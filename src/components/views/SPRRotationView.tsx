@@ -308,7 +308,7 @@ export const SPRRotationView: React.FC = () => {
         </div>
       </div>
 
-      {/* REGISTERED SPR POOL SECTION */}
+      {/* REGISTERED SPR POOL & DUTY DETAILS SECTION (Requirement #2) */}
       <div className="space-y-4 pt-4">
         <div className="flex items-center justify-between">
           <div>
@@ -316,7 +316,7 @@ export const SPRRotationView: React.FC = () => {
               REGISTERED SPR ROSTER ({sprs.length})
             </div>
             <h3 className="text-xl font-bold text-slate-900 tracking-tight">
-              Active SPR Pool & Cycle Status
+              Active SPR Pool & Company Duty History
             </h3>
           </div>
           <button
@@ -328,40 +328,165 @@ export const SPRRotationView: React.FC = () => {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sprs.map((spr) => (
-            <div key={spr.id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between hover:border-slate-200 transition-all">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-[#0B132B] text-amber-400 flex items-center justify-center font-bold text-sm shadow-xs">
-                  {spr.name.split(' ').map((n) => n[0]).join('')}
-                </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {sprs.map((spr) => {
+            const sprDuties = dutyAssignments.filter(
+              (d) => d.sprId === spr.id || d.sprName.toLowerCase() === spr.name.toLowerCase()
+            );
+
+            return (
+              <div
+                key={spr.id}
+                className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between hover:border-slate-200 transition-all space-y-4"
+              >
                 <div>
-                  <div className="font-extrabold text-slate-900 text-xs">{spr.name}</div>
-                  <div className="text-[10px] text-slate-400 font-mono font-semibold">SAP: {spr.sapId} · {spr.branch}</div>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-full">
-                      Duties: {spr.totalDuties}
+                  {/* Top Avatar & Name Header */}
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-11 h-11 rounded-2xl bg-[#0B132B] text-amber-400 flex items-center justify-center font-bold text-sm shadow-xs">
+                        {spr.name.split(' ').map((n) => n[0]).join('')}
+                      </div>
+                      <div>
+                        <div className="font-extrabold text-slate-900 text-sm">{spr.name}</div>
+                        <div className="text-[11px] text-slate-400 font-mono font-semibold">
+                          SAP: {spr.sapId} · {spr.branch}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => deleteSpr(spr.id)}
+                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                      title="Remove SPR"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Status Pills */}
+                  <div className="flex items-center space-x-2 mt-3">
+                    <span className="text-[10px] bg-slate-100 text-slate-700 font-bold px-2.5 py-0.5 rounded-full">
+                      Total Duties: {spr.totalDuties}
                     </span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      spr.usedInCurrentCycle
-                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    }`}>
-                      {spr.usedInCurrentCycle ? 'Assigned in Cycle' : 'Available'}
+                    <span
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                        spr.usedInCurrentCycle
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}
+                    >
+                      {spr.usedInCurrentCycle ? '• Active in Cycle' : '• Available'}
                     </span>
+                  </div>
+
+                  {/* Requirement #2: Detailed Duty Allocations showing which company they did duty in */}
+                  <div className="mt-4 pt-3 border-t border-slate-100 space-y-2">
+                    <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                      <span>Assigned Company Duties ({sprDuties.length})</span>
+                      <Building2 className="w-3 h-3 text-slate-400" />
+                    </div>
+
+                    {sprDuties.length > 0 ? (
+                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        {sprDuties.map((duty) => (
+                          <div
+                            key={duty.id}
+                            className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/60 space-y-1 text-xs"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-extrabold text-slate-900">{duty.companyName}</span>
+                              <span
+                                className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
+                                  duty.status === 'ACCEPTED'
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : duty.status === 'COMPLETED'
+                                    ? 'bg-slate-200 text-slate-700'
+                                    : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {duty.status}
+                              </span>
+                            </div>
+
+                            <div className="text-[11px] font-medium text-slate-600">
+                              {duty.roundName} · <span className="text-slate-500">{duty.role}</span>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                              <span>📍 {duty.venue}</span>
+                              <span>🕒 {duty.timeWindow}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 font-semibold bg-slate-50 p-3 rounded-xl border border-slate-100 text-center italic">
+                        No duty assigned in current cycle. Available for next round allocation.
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
+            );
+          })}
+        </div>
+      </div>
 
-              <button
-                onClick={() => deleteSpr(spr.id)}
-                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                title="Remove SPR"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+      {/* COMPREHENSIVE DUTY LOG & ALLOCATION SHEET BOARD */}
+      <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase">
+              DUTY ALLOCATION BOARD
             </div>
-          ))}
+            <h3 className="text-xl font-bold text-slate-900 tracking-tight">
+              All Active SPR Duties Across Companies
+            </h3>
+          </div>
+          <span className="bg-slate-100 text-slate-700 text-xs font-extrabold px-3 py-1 rounded-full">
+            {dutyAssignments.length} Records
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="border-b border-slate-100 text-slate-400 font-extrabold uppercase tracking-wider">
+              <tr>
+                <th className="pb-3">SPR NAME</th>
+                <th className="pb-3">COMPANY</th>
+                <th className="pb-3">ROUND PROCESS</th>
+                <th className="pb-3">VENUE</th>
+                <th className="pb-3">TIME WINDOW</th>
+                <th className="pb-3">ROLE</th>
+                <th className="pb-3">STATUS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {dutyAssignments.map((assignment) => (
+                <tr key={assignment.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="py-3.5 font-extrabold text-slate-900">{assignment.sprName}</td>
+                  <td className="py-3.5 font-bold text-amber-900">{assignment.companyName}</td>
+                  <td className="py-3.5 text-slate-700 font-semibold">{assignment.roundName}</td>
+                  <td className="py-3.5 text-slate-600 font-medium">{assignment.venue}</td>
+                  <td className="py-3.5 font-mono text-slate-500">{assignment.timeWindow}</td>
+                  <td className="py-3.5 text-slate-600 font-medium">{assignment.role}</td>
+                  <td className="py-3.5">
+                    <span
+                      className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full ${
+                        assignment.status === 'ACCEPTED'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : assignment.status === 'COMPLETED'
+                          ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
+                      }`}
+                    >
+                      • {assignment.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
