@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Edit3,
   Award,
+  Users,
 } from 'lucide-react';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 
@@ -33,7 +34,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
 
-  // Completion Form Inputs (asks user for actual data upon completion)
+  // Completion Form Inputs
   const [completionSatCount, setCompletionSatCount] = useState<number>(company.totalStudentsSat || 120);
   const [completionOffersCount, setCompletionOffersCount] = useState<number>(company.offersGivenCount || 10);
   const [completionFeedback, setCompletionFeedback] = useState<string>(company.recruiterFeedback || '');
@@ -42,12 +43,14 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [roundName, setRoundName] = useState('');
   const [roundType, setRoundType] = useState<RoundType>('TECHNICAL_INTERVIEW');
   const [roundMode, setRoundMode] = useState<RoundMode>('ON_CAMPUS');
-  const [venue, setVenue] = useState('Block A - Lab 1');
-  const [capacity, setCapacity] = useState<number>(50);
-  const [sprsNeeded, setSprsNeeded] = useState<number>(3);
   const [date, setDate] = useState('2026-09-12');
-  const [startTime, setStartTime] = useState('10:00');
-  const [endTime, setEndTime] = useState('13:00');
+
+  // Total Venues and Venues List
+  const [totalVenues, setTotalVenues] = useState<number>(1);
+  const [venuesList, setVenuesList] = useState<string[]>(['Block A - Lab 1']);
+
+  // Total SPRs Needed
+  const [sprsNeeded, setSprsNeeded] = useState<number>(3);
   const [shortlistedStudentsTemp, setShortlistedStudentsTemp] = useState<any[]>([]);
 
   // Find drives & rounds for this company
@@ -56,6 +59,37 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const companyOffers = offers.filter((o) => o.companyId === company.id || o.companyName === company.name);
 
   const isCompleted = company.status === 'COMPLETED';
+
+  const handleTotalVenuesChange = (count: number) => {
+    const validCount = Math.max(1, Math.min(10, count));
+    setTotalVenues(validCount);
+    setVenuesList((prev) => {
+      const updated = [...prev];
+      while (updated.length < validCount) {
+        const char = String.fromCharCode(65 + (updated.length % 26));
+        updated.push(`Block ${char} - Lab ${updated.length + 1}`);
+      }
+      return updated.slice(0, validCount);
+    });
+  };
+
+  const handleVenueNameChange = (index: number, name: string) => {
+    setVenuesList((prev) => {
+      const updated = [...prev];
+      updated[index] = name;
+      return updated;
+    });
+  };
+
+  // Divide total SPRs needed equally/randomly across venues
+  const getSprAllocationPerVenue = () => {
+    const base = Math.floor(sprsNeeded / totalVenues);
+    const remainder = sprsNeeded % totalVenues;
+    return venuesList.map((v, i) => ({
+      venueName: v || `Venue ${i + 1}`,
+      allocatedSprs: base + (i < remainder ? 1 : 0),
+    }));
+  };
 
   const handleDeleteCompany = () => {
     deleteCompany(company.id);
@@ -77,6 +111,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
 
     const driveId = companyDrives[0]?.id || `drv-${company.id}`;
     const roundNumber = companyRounds.length + 1;
+    const combinedVenueString = venuesList.filter(Boolean).join(' | ');
 
     createRound(
       {
@@ -87,18 +122,18 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         name: roundName || `${roundType} Round`,
         type: roundType,
         mode: roundMode,
-        venue,
-        capacity,
+        venue: combinedVenueString || 'Block A - Lab 1',
+        capacity: sprsNeeded * 20,
         date,
-        startTime,
-        endTime,
+        startTime: '09:00',
+        endTime: '17:00',
         status: 'SCHEDULED',
-        totalShortlisted: shortlistedStudentsTemp.length || capacity || 50,
+        totalShortlisted: shortlistedStudentsTemp.length || sprsNeeded * 20,
         attendedCount: 0,
         absentCount: 0,
         assignedSprIds: [],
       },
-      shortlistedStudentsTemp.length > 0 ? shortlistedStudentsTemp : students.slice(0, capacity || 50)
+      shortlistedStudentsTemp.length > 0 ? shortlistedStudentsTemp : students.slice(0, sprsNeeded * 20)
     );
 
     setShowAddRoundModal(false);
@@ -128,7 +163,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </button>
       </div>
 
-      {/* Main Header Card matching screenshot */}
+      {/* Main Header Card */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center space-x-5">
           <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-700 font-black text-2xl flex items-center justify-center shadow-xs">
@@ -303,9 +338,6 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                     <div className="flex items-center space-x-2">
                       <Calendar className="w-3.5 h-3.5 text-slate-400" />
                       <span>{rnd.date}</span>
-                      <span className="text-slate-300">•</span>
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{rnd.startTime} - {rnd.endTime}</span>
                     </div>
 
                     <div className="flex items-center space-x-2">
@@ -556,7 +588,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       )}
 
-      {/* Add Round Modal matching Screenshot 1 EXACTLY */}
+      {/* Add Round Modal matching user specifications */}
       {showAddRoundModal && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-slate-100 my-8">
@@ -573,7 +605,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
             </div>
 
             <form onSubmit={handleFinalizeCreateRound} className="space-y-3 text-xs">
-              {/* Target Company dropdown (pre-selected for this company) */}
+              {/* Target Company dropdown (pre-selected) */}
               <div>
                 <label className="font-bold text-slate-700 block mb-1">Target Company</label>
                 <select
@@ -585,7 +617,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                 </select>
               </div>
 
-              {/* Round Title & Round Category Grid matching Screenshot 1 */}
+              {/* Round Title & Round Category Grid */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">Round Title</label>
@@ -616,16 +648,15 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                 </div>
               </div>
 
-              {/* Venue Location & Mode Grid matching Screenshot 1 */}
+              {/* Date Scheduled & Mode Grid */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Venue Location</label>
+                  <label className="font-bold text-slate-700 block mb-1">Process Scheduled Date *</label>
                   <input
-                    type="text"
+                    type="date"
                     required
-                    placeholder="e.g. Block A - Lab 1"
-                    value={venue}
-                    onChange={(e) => setVenue(e.target.value)}
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                   />
                 </div>
@@ -644,32 +675,72 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                 </div>
               </div>
 
-              {/* Number of SPRs Needed & Room Capacity Grid matching Screenshot 1 */}
+              {/* Total Venues & Total SPRs Needed */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Number of SPRs Needed</label>
+                  <label className="font-bold text-slate-700 block mb-1">Total Venues *</label>
                   <input
                     type="number"
                     min={1}
                     max={10}
+                    value={totalVenues}
+                    onChange={(e) => handleTotalVenuesChange(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Total SPRs Needed *</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
                     value={sprsNeeded}
                     onChange={(e) => setSprsNeeded(Number(e.target.value))}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Room Capacity</label>
-                  <input
-                    type="number"
-                    value={capacity}
-                    onChange={(e) => setCapacity(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                  />
+              {/* Venue Locations Input List */}
+              <div className="space-y-2 bg-slate-50/80 p-3 rounded-2xl border border-slate-200/60">
+                <label className="font-bold text-slate-700 block text-[11px] uppercase tracking-wider">
+                  Venue Locations ({venuesList.length})
+                </label>
+                {venuesList.map((venueName, idx) => (
+                  <div key={idx} className="flex items-center space-x-2">
+                    <span className="text-[11px] font-bold text-slate-400 w-16">Venue {idx + 1}:</span>
+                    <input
+                      type="text"
+                      required
+                      placeholder={`e.g. Block ${String.fromCharCode(65 + idx)} - Lab ${idx + 1}`}
+                      value={venueName}
+                      onChange={(e) => handleVenueNameChange(idx, e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2 font-bold outline-none text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {/* SPR Equal/Random Allocation Breakdown Display */}
+              <div className="bg-emerald-50 border border-emerald-200/80 p-3 rounded-2xl space-y-1">
+                <div className="font-extrabold text-emerald-900 text-[11px] flex items-center space-x-1">
+                  <Users className="w-3.5 h-3.5 text-emerald-600 inline mr-1" />
+                  <span>Equal SPR Allocation Across Venues ({sprsNeeded} SPRs Total)</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {getSprAllocationPerVenue().map((alloc, idx) => (
+                    <span
+                      key={idx}
+                      className="bg-white text-emerald-900 font-extrabold text-[10px] px-2.5 py-1 rounded-lg border border-emerald-200 shadow-2xs"
+                    >
+                      {alloc.venueName}: {alloc.allocatedSprs} SPRs
+                    </span>
+                  ))}
                 </div>
               </div>
 
-              {/* Shortlist Candidate Roster Excel card matching Screenshot 1 */}
+              {/* Shortlist Candidate Roster Excel card */}
               <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-2xl flex items-center justify-between">
                 <div>
                   <div className="font-bold text-amber-900">Shortlist Candidate Roster</div>
@@ -689,7 +760,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                 </button>
               </div>
 
-              {/* Footer action buttons matching Screenshot 1 */}
+              {/* Footer action buttons */}
               <div className="pt-3 flex justify-end space-x-3 border-t border-slate-100">
                 <button
                   type="button"
