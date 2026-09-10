@@ -1,19 +1,25 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, ArrowRight, Sparkles } from 'lucide-react';
-import { parseShortlistExcel, FuzzyParseResult } from '../../utils/excelUtils';
-import { Student } from '../../types';
+import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, ArrowRight, Sparkles, Download } from 'lucide-react';
+import { parseShortlistExcel, FuzzyParseResult, exportAnnotatedAttendanceExcel } from '../../utils/excelUtils';
+import { Student, RoundStudent } from '../../types';
 
 interface ExcelUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
   onShortlistValidated: (students: Student[]) => void;
+  targetRoundId?: string;
+  companyName?: string;
+  roundName?: string;
 }
 
 export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   isOpen,
   onClose,
   onShortlistValidated,
+  targetRoundId,
+  companyName,
+  roundName,
 }) => {
   const { students, resolveUnknownSapIds } = usePortal();
   const [parseResult, setParseResult] = useState<FuzzyParseResult | null>(null);
@@ -39,10 +45,9 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     reader.readAsArrayBuffer(file);
   };
 
-  const handleResolveAndProceed = () => {
-    if (!parseResult) return;
+  const getValidStudentsFromParse = () => {
+    if (!parseResult) return { createdStudents: [], allValid: [] };
 
-    // Convert unmatched recruiter rows into registered UPES student records with SAP IDs
     const createdStudents: Student[] = parseResult.unmatchedRows.map((u, i) => ({
       id: `st-new-${Date.now()}-${i}`,
       sapId: u.applicantId,
@@ -59,14 +64,51 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       status: 'ELIGIBLE',
     }));
 
-    if (createdStudents.length > 0) {
-      resolveUnknownSapIds(createdStudents);
-    }
-
     const allValid = [
       ...parseResult.matchedStudents.map((m) => m.student),
       ...createdStudents,
     ];
+
+    return { createdStudents, allValid };
+  };
+
+  const handleDownloadAnnotatedExcel = () => {
+    const { allValid } = getValidStudentsFromParse();
+    if (allValid.length === 0) return;
+
+    const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
+    const roundStudentsForExport: RoundStudent[] = allValid.map((st, i) => ({
+      roundId: roundIdForLink,
+      studentId: st.id,
+      sapId: st.sapId,
+      studentName: st.name,
+      email: st.email,
+      phone: st.phone,
+      branch: st.branch,
+      shortlistStatus: 'SHORTLISTED',
+      attendanceStatus: 'PENDING',
+      panelNumber: `Panel ${(i % 4) + 1}`,
+    }));
+
+    exportAnnotatedAttendanceExcel(
+      companyName || 'Recruiter',
+      roundName || 'Shortlist',
+      roundIdForLink,
+      roundStudentsForExport
+    );
+  };
+
+  const handleResolveAndProceed = () => {
+    if (!parseResult) return;
+
+    const { createdStudents, allValid } = getValidStudentsFromParse();
+
+    if (createdStudents.length > 0) {
+      resolveUnknownSapIds(createdStudents);
+    }
+
+    // Auto export annotated Excel with attendance roster links right after uploading!
+    handleDownloadAnnotatedExcel();
 
     onShortlistValidated(allValid);
     onClose();
@@ -158,20 +200,30 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
               </div>
             </div>
 
-            <div className="pt-2 flex items-center justify-end space-x-3">
+            <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
               <button
-                onClick={() => setParseResult(null)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                onClick={handleDownloadAnnotatedExcel}
+                className="inline-flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer"
               >
-                Upload Different File
+                <Download className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Download Roster with Attendance Links (.xlsx)</span>
               </button>
-              <button
-                onClick={handleResolveAndProceed}
-                className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md transition-all cursor-pointer"
-              >
-                <span>Confirm & Create Round Roster</span>
-                <ArrowRight className="w-4 h-4 text-amber-400" />
-              </button>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setParseResult(null)}
+                  className="px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Upload Different File
+                </button>
+                <button
+                  onClick={handleResolveAndProceed}
+                  className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-md transition-all cursor-pointer"
+                >
+                  <span>Confirm & Create Round Roster</span>
+                  <ArrowRight className="w-4 h-4 text-amber-400" />
+                </button>
+              </div>
             </div>
           </div>
         )}

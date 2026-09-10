@@ -8,7 +8,7 @@ import { Round, Student } from '../../types';
 import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
-  const { rounds, roundStudents, manualAttendanceOverride, createRound } = usePortal();
+  const { rounds, roundStudents, manualAttendanceOverride, createRound, uploadShortlistForRound } = usePortal();
   const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[1]?.id || rounds[0]?.id || '');
   const [panelFilter, setPanelFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -341,17 +341,12 @@ export const AttendanceView: React.FC = () => {
       <ExcelUploadModal
         isOpen={showExcelUpload}
         onClose={() => setShowExcelUpload(false)}
+        targetRoundId={selectedRound?.id}
+        companyName={selectedRound?.companyName}
+        roundName={selectedRound?.name}
         onShortlistValidated={(validStudents: Student[]) => {
           if (selectedRound) {
-            createRound(
-              {
-                id: selectedRound.id,
-                companyName: selectedRound.companyName,
-                name: selectedRound.name,
-                type: selectedRound.type,
-              },
-              validStudents
-            );
+            uploadShortlistForRound(selectedRound.id, validStudents);
           }
           setShowExcelUpload(false);
         }}

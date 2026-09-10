@@ -68,6 +68,7 @@ interface PortalContextType {
   updateCompanyFeedback: (companyId: string, feedback: string) => void;
   finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
+  uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[]) => void;
   markAttendance: (roundId: string, sapId: string, method?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
   triggerSprAllocation: (roundId: string, countNeeded: number) => { success: boolean; count: number };
@@ -348,6 +349,45 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates and ${allocatedSprIds.length} allocated SPRs.`);
   };
 
+  const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[]) => {
+    const targetRound = rounds.find((r) => r.id === roundId);
+    const companyName = targetRound?.companyName || 'Company';
+
+    const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
+      roundId,
+      studentId: st.id,
+      sapId: st.sapId,
+      studentName: st.name,
+      email: st.email,
+      phone: st.phone,
+      branch: st.branch,
+      shortlistStatus: 'SHORTLISTED',
+      attendanceStatus: 'PENDING',
+      panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
+    }));
+
+    setRoundStudents((prev) => [
+      ...newRoundStudents,
+      ...prev.filter((rs) => rs.roundId !== roundId),
+    ]);
+
+    setRounds((prev) =>
+      prev.map((r) =>
+        r.id === roundId
+          ? {
+              ...r,
+              totalShortlisted: shortlistedStudents.length,
+            }
+          : r
+      )
+    );
+
+    addAuditLog(
+      'UPLOAD_SHORTLIST',
+      `Uploaded shortlist of ${shortlistedStudents.length} candidates for round ${companyName} ${targetRound?.name || roundId}.`
+    );
+  };
+
   const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN') => {
     const student = students.find((s) => s.sapId === sapId);
     if (!student) {
@@ -604,6 +644,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateCompanyFeedback,
         finalizeCompletedDrive,
         createRound,
+        uploadShortlistForRound,
         markAttendance,
         manualAttendanceOverride,
         triggerSprAllocation,

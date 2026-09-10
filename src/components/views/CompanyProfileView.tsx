@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { RoundDetailsModal } from '../modals/RoundDetailsModal';
+import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 
 interface CompanyProfileViewProps {
   company: Company;
@@ -27,7 +28,7 @@ interface CompanyProfileViewProps {
 }
 
 export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company, onBack }) => {
-  const { drives, rounds, offers, deleteCompany, createRound, finalizeCompletedDrive, sprs, students } = usePortal();
+  const { drives, rounds, offers, deleteCompany, createRound, uploadShortlistForRound, finalizeCompletedDrive, sprs, students } = usePortal();
 
   // Modals State
   const [showAddRoundModal, setShowAddRoundModal] = useState(false);
@@ -35,6 +36,8 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
+  const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
+  const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
 
   // Completion Form Inputs
   const [completionSatCount, setCompletionSatCount] = useState<number>(company.totalStudentsSat || 120);
@@ -822,12 +825,26 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       )}
 
+      {/* QR Control Display Modal */}
+      <RoundQRControlModal round={selectedRoundForQR} onClose={() => setSelectedRoundForQR(null)} />
+
       {/* Excel Upload Modal */}
       <ExcelUploadModal
         isOpen={showExcelUpload}
-        onClose={() => setShowExcelUpload(false)}
+        onClose={() => {
+          setShowExcelUpload(false);
+          setSelectedRoundForUpload(null);
+        }}
+        targetRoundId={selectedRoundForUpload?.id}
+        companyName={selectedRoundForUpload?.companyName || company.name}
+        roundName={selectedRoundForUpload?.name || roundName}
         onShortlistValidated={(validStudents) => {
-          setShortlistedStudentsTemp(validStudents);
+          if (selectedRoundForUpload) {
+            uploadShortlistForRound(selectedRoundForUpload.id, validStudents);
+            setSelectedRoundForUpload(null);
+          } else {
+            setShortlistedStudentsTemp(validStudents);
+          }
           setShowExcelUpload(false);
         }}
       />
@@ -836,6 +853,11 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
       <RoundDetailsModal
         round={selectedRoundForDetails}
         onClose={() => setSelectedRoundForDetails(null)}
+        onOpenQRModal={(r) => setSelectedRoundForQR(r)}
+        onOpenUploadModal={(r) => {
+          setSelectedRoundForUpload(r);
+          setShowExcelUpload(true);
+        }}
       />
     </div>
   );

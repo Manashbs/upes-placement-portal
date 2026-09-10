@@ -12,24 +12,10 @@ interface RoundQRControlModalProps {
 
 export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round, onClose }) => {
   const { roundStudents, regenerateQR, toggleGeoFence } = usePortal();
-  const [timeLeft, setTimeLeft] = useState<number>(1800); // 30 mins
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   if (!round) return null;
 
   const currentRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
-
-  const formatTime = (secs: number) => {
-    const m = Math.floor(secs / 60);
-    const s = secs % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
 
   const handleDownloadQR = () => {
     const svgElement = document.getElementById('round-qr-svg');
@@ -78,7 +64,7 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
           </button>
         </div>
 
-        {/* Live Signed QR Code Display */}
+        {/* Live Permanent Signed QR Code Display */}
         <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 text-center space-y-4 flex flex-col items-center justify-center">
           <div className="p-4 bg-white rounded-2xl shadow-md border border-slate-100 inline-block relative">
             <QRCodeSVG
@@ -93,12 +79,9 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 text-xs font-bold text-slate-600">
+          <div className="inline-flex items-center space-x-2 text-xs font-bold text-emerald-800 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Token expires in: </span>
-            <span className="font-mono text-amber-600 text-sm bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-              {formatTime(timeLeft)}
-            </span>
+            <span>Permanent QR Code · Valid Throughout Round</span>
           </div>
         </div>
 

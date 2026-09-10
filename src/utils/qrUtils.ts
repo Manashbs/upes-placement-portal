@@ -13,7 +13,7 @@ export function generateRoundQRToken(
   driveId: string,
   companyName: string,
   roundName: string,
-  validityMinutes: number = 60
+  validityMinutes: number = 5256000
 ): { token: string; expiresAtIso: string } {
   const now = Date.now();
   const expiresAt = now + validityMinutes * 60 * 1000;
@@ -25,7 +25,7 @@ export function generateRoundQRToken(
     roundName,
     timestamp: now,
     expiresAt,
-    signature: `UPES-SEC-${roundId.slice(0, 4)}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+    signature: `UPES-SEC-${roundId.slice(0, 4)}-PERMANENT`,
   };
 
   const tokenString = btoa(JSON.stringify(tokenData));
@@ -39,11 +39,6 @@ export function validateQRToken(tokenString: string): { valid: boolean; message:
   try {
     const decodedJson = atob(tokenString);
     const data: QRTokenData = JSON.parse(decodedJson);
-    const now = Date.now();
-
-    if (now > data.expiresAt) {
-      return { valid: false, message: 'QR Code token has expired. Please ask the SPR or Placement Cell to refresh the QR Code.' };
-    }
 
     if (!data.roundId || !data.signature) {
       return { valid: false, message: 'Invalid or forged QR Code token.' };

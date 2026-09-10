@@ -8,7 +8,7 @@ import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 import { exportRosterExcel } from '../../utils/excelUtils';
 
 export const RoundsView: React.FC = () => {
-  const { rounds, companies, createRound, roundStudents } = usePortal();
+  const { rounds, companies, createRound, uploadShortlistForRound, roundStudents } = usePortal();
   const [activeTab, setActiveTab] = useState<'ALL' | 'LIVE' | 'UPCOMING' | 'COMPLETED'>('ALL');
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
@@ -489,9 +489,20 @@ export const RoundsView: React.FC = () => {
       {/* Excel Upload Modal */}
       <ExcelUploadModal
         isOpen={showExcelUpload}
-        onClose={() => setShowExcelUpload(false)}
+        onClose={() => {
+          setShowExcelUpload(false);
+          setSelectedRoundForUpload(null);
+        }}
+        targetRoundId={selectedRoundForUpload?.id}
+        companyName={selectedRoundForUpload?.companyName}
+        roundName={selectedRoundForUpload?.name}
         onShortlistValidated={(validStudents) => {
-          setShortlistedStudentsTemp(validStudents);
+          if (selectedRoundForUpload) {
+            uploadShortlistForRound(selectedRoundForUpload.id, validStudents);
+            setSelectedRoundForUpload(null);
+          } else {
+            setShortlistedStudentsTemp(validStudents);
+          }
           setShowExcelUpload(false);
         }}
       />
