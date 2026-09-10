@@ -171,8 +171,8 @@ export const CompaniesView: React.FC = () => {
 
           const compRounds = rounds.filter((r) => r.companyId === comp.id || r.companyName === comp.name);
           const compOffers = offers.filter((o) => o.companyId === comp.id || o.companyName === comp.name);
-          const totalSat = compRounds.reduce((acc, r) => acc + (r.attendedCount || r.totalShortlisted || 0), 0) || 142;
-          const offersGiven = compOffers.length || (isCompleted ? 68 : 8);
+          const totalSat = comp.totalStudentsSat || compRounds.reduce((acc, r) => acc + (r.attendedCount || r.totalShortlisted || 0), 0) || 0;
+          const offersGiven = comp.offersGivenCount || compOffers.length || 0;
 
           return (
             <div

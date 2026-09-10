@@ -192,6 +192,9 @@ export const initialCompanies: Company[] = [
     activeDrivesCount: 0,
     hrContact: { name: 'Ravi Teja', email: 'rteja@lntecc.com', phone: '+91 98555 66677' },
     pastYearHired: 68,
+    totalStudentsSat: 1420,
+    offersGivenCount: 68,
+    recruiterFeedback: 'Larsen & Toubro HR Team expressed high satisfaction with UPES candidates. 68 offers extended across core engineering disciplines.',
   },
 ];
 

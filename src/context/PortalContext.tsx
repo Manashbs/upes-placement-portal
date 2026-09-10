@@ -66,6 +66,7 @@ interface PortalContextType {
   deleteCompany: (id: string) => void;
   toggleCompanyStatus: (id: string, status: Company['status']) => void;
   updateCompanyFeedback: (companyId: string, feedback: string) => void;
+  finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
   markAttendance: (roundId: string, sapId: string, method?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
@@ -218,6 +219,23 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       prev.map((c) => (c.id === companyId ? { ...c, recruiterFeedback: feedback } : c))
     );
     addAuditLog('UPDATE_COMPANY_FEEDBACK', `Updated recruiter feedback for company ${companyId}.`);
+  };
+
+  const finalizeCompletedDrive = (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => {
+    setCompanies((prev) =>
+      prev.map((c) =>
+        c.id === companyId
+          ? {
+              ...c,
+              status: 'COMPLETED',
+              totalStudentsSat: data.totalStudentsSat,
+              offersGivenCount: data.offersGivenCount,
+              recruiterFeedback: data.recruiterFeedback,
+            }
+          : c
+      )
+    );
+    addAuditLog('FINALIZE_COMPLETED_DRIVE', `Marked company drive ${companyId} as COMPLETED with ${data.offersGivenCount} offers.`);
   };
 
   const createRound = (roundData: Partial<Round>, shortlistedStudents: Student[]) => {
@@ -527,6 +545,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteCompany,
         toggleCompanyStatus,
         updateCompanyFeedback,
+        finalizeCompletedDrive,
         createRound,
         markAttendance,
         manualAttendanceOverride,

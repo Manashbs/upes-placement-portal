@@ -41,6 +41,7 @@ export interface Company {
   pastYearHired?: number;
   recruiterFeedback?: string;
   totalStudentsSat?: number;
+  offersGivenCount?: number;
 }
 
 export type RoundType = 
