@@ -22,25 +22,6 @@ export const CompaniesView: React.FC = () => {
   const [minCgpa, setMinCgpa] = useState<number>(7.5);
   const [maxBacklogs, setMaxBacklogs] = useState<number>(0);
 
-  // Selection Rounds configuration (1 to 8 rounds supported)
-  const [numRounds, setNumRounds] = useState<number>(3);
-  const [roundsConfig, setRoundsConfig] = useState([
-    { name: 'Online Assessment', venue: 'Block A - Lab 1', type: 'ONLINE_TEST' as Round['type'] },
-    { name: 'Technical Interview', venue: 'Block B - Executive Rooms', type: 'TECHNICAL_INTERVIEW' as Round['type'] },
-    { name: 'HR Interview', venue: 'Block B - Room 104', type: 'HR_INTERVIEW' as Round['type'] },
-    { name: 'Coding Assessment', venue: 'Block A - Lab 3', type: 'CODING' as Round['type'] },
-    { name: 'Group Discussion', venue: 'Block B - GD Room 1', type: 'GD' as Round['type'] },
-    { name: 'Pre-Placement Talk', venue: 'Auditorium Main', type: 'PPT' as Round['type'] },
-    { name: 'Technical Round 2', venue: 'Block B - Room 201', type: 'ASSESSMENT' as Round['type'] },
-    { name: 'Document Verification', venue: 'Block A - Admin Desk', type: 'DOCUMENTATION' as Round['type'] },
-  ]);
-
-  const updateRoundDetail = (index: number, field: 'name' | 'venue', value: string) => {
-    setRoundsConfig((prev) =>
-      prev.map((r, idx) => (idx === index ? { ...r, [field]: value } : r))
-    );
-  };
-
   if (selectedCompany) {
     return (
       <CompanyProfileView
@@ -87,14 +68,6 @@ export const CompaniesView: React.FC = () => {
 
     const rolesList = newCompRoles.split(',').map((r) => r.trim()).filter(Boolean);
 
-    const roundTypesList: { name: string; type: Round['type']; venue: string }[] = roundsConfig
-      .slice(0, numRounds)
-      .map((r) => ({
-        name: r.name || 'Selection Round',
-        type: r.type,
-        venue: r.venue || 'Block A - Campus Venue',
-      }));
-
     addCompany({
       name: newCompName,
       industry: newCompIndustry || 'Technology',
@@ -102,13 +75,8 @@ export const CompaniesView: React.FC = () => {
       ctcTotal: Number(newCompCtc),
       description: newCompDesc || 'Partner organization participating in UPES placement season drives.',
       rolesOffered: rolesList.length > 0 ? rolesList : ['Software Engineer'],
-      roundsCount: numRounds,
-      roundTypes: roundTypesList,
       minCgpa: Number(minCgpa),
       maxBacklogs: Number(maxBacklogs),
-      hrName: 'Sarah Jenkins',
-      hrEmail: `hr@${newCompName.toLowerCase().replace(/\s+/g, '')}.com`,
-      hrPhone: '+91 98765 00000',
     });
 
     setShowAddModal(false);
@@ -384,56 +352,6 @@ export const CompaniesView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Section 3: Selection Rounds Configuration */}
-              <div className="bg-slate-50 p-4 rounded-2xl space-y-3 border border-slate-200/80">
-                <div className="flex items-center justify-between">
-                  <div className="font-extrabold text-slate-900 uppercase text-[10px] tracking-widest">3. Selection Rounds Structure</div>
-                  <div className="flex items-center space-x-2">
-                    <span className="font-bold text-slate-600">Total Rounds:</span>
-                    <select
-                      value={numRounds}
-                      onChange={(e) => setNumRounds(Number(e.target.value))}
-                      className="bg-white border border-slate-200 rounded-lg p-1.5 font-bold outline-none cursor-pointer text-xs"
-                    >
-                      {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                        <option key={n} value={n}>
-                          {n} {n === 1 ? 'Round' : 'Rounds'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {roundsConfig.slice(0, numRounds).map((r, idx) => (
-                    <div key={idx} className="grid grid-cols-2 gap-3 bg-white p-2.5 rounded-xl border border-slate-200/80">
-                      <div>
-                        <label className="font-semibold text-slate-600 text-[11px] block mb-1">
-                          Round {idx + 1} Name
-                        </label>
-                        <input
-                          type="text"
-                          value={r.name}
-                          onChange={(e) => updateRoundDetail(idx, 'name', e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-900 outline-none text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="font-semibold text-slate-600 text-[11px] block mb-1">
-                          Round {idx + 1} Venue
-                        </label>
-                        <input
-                          type="text"
-                          value={r.venue}
-                          onChange={(e) => updateRoundDetail(idx, 'venue', e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-900 outline-none text-xs"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
               <div className="pt-3 flex items-center justify-end space-x-3">
                 <button
                   type="button"
@@ -446,7 +364,7 @@ export const CompaniesView: React.FC = () => {
                   type="submit"
                   className="px-6 py-2.5 rounded-xl bg-[#0B132B] text-white font-extrabold hover:bg-slate-800 shadow-md cursor-pointer"
                 >
-                  Create Company & Generate Selection Drives
+                  Save Company Profile
                 </button>
               </div>
             </form>

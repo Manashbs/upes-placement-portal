@@ -34,13 +34,13 @@ export interface ComprehensiveCompanyPayload {
   ctcTotal: number;
   description: string;
   rolesOffered: string[];
-  roundsCount: number;
-  roundTypes: { name: string; type: Round['type']; venue: string }[];
+  roundsCount?: number;
+  roundTypes?: { name: string; type: Round['type']; venue: string }[];
   minCgpa: number;
   maxBacklogs: number;
-  hrName: string;
-  hrEmail: string;
-  hrPhone: string;
+  hrName?: string;
+  hrEmail?: string;
+  hrPhone?: string;
 }
 
 interface PortalContextType {
@@ -157,7 +157,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       status: 'ACTIVE',
       eligibleStudentsCount: eligiblePool.length || 955,
       activeDrivesCount: payload.rolesOffered.length || 1,
-      hrContact: { name: payload.hrName, email: payload.hrEmail, phone: payload.hrPhone },
+      hrContact: {
+        name: payload.hrName || 'Sarah Jenkins',
+        email: payload.hrEmail || `hr@${payload.name.toLowerCase().replace(/\s+/g, '')}.com`,
+        phone: payload.hrPhone || '+91 98765 00000',
+      },
     };
 
     setCompanies((prev) => [createdComp, ...prev]);
@@ -183,58 +187,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setDrives((prev) => [newDrive, ...prev]);
 
-    // Create Rounds specified
-    const createdRounds: Round[] = payload.roundTypes.map((rt, index) => {
-      const roundId = `rnd-${Date.now()}-${index}`;
-      const qrResult = generateRoundQRToken(roundId, driveId, payload.name, rt.name, 30, true);
-
-      return {
-        id: roundId,
-        driveId,
-        companyId: compId,
-        companyName: payload.name,
-        roundNumber: index + 1,
-        name: rt.name,
-        type: rt.type,
-        mode: rt.venue.toLowerCase().includes('virtual') ? 'VIRTUAL' : 'ON_CAMPUS',
-        date: '2026-09-11',
-        startTime: '10:00',
-        endTime: '13:00',
-        venue: rt.venue || 'Block A - Computer Center',
-        capacity: 200,
-        qrToken: qrResult.token,
-        qrExpiresAt: qrResult.expiresAtIso,
-        geoFenceEnabled: true,
-        status: index === 0 ? 'SCHEDULED' : 'SCHEDULED',
-        assignedSprIds: [],
-        totalShortlisted: eligiblePool.length || 100,
-        attendedCount: 0,
-        absentCount: 0,
-      };
-    });
-
-    setRounds((prev) => [...createdRounds, ...prev]);
-
-    // Populate round students shortlist for round 1
-    if (createdRounds.length > 0) {
-      const firstRound = createdRounds[0];
-      const newRoundStudents: RoundStudent[] = eligiblePool.slice(0, 100).map((st, i) => ({
-        roundId: firstRound.id,
-        studentId: st.id,
-        sapId: st.sapId,
-        studentName: st.name,
-        email: st.email,
-        phone: st.phone,
-        branch: st.branch,
-        shortlistStatus: 'SHORTLISTED',
-        attendanceStatus: 'PENDING',
-        panelNumber: `Panel ${(i % 4) + 1}`,
-      }));
-
-      setRoundStudents((prev) => [...newRoundStudents, ...prev]);
-    }
-
-    addAuditLog('CREATE_COMPANY', `Added company ${payload.name} with ${payload.rolesOffered.length} roles and ${payload.roundTypes.length} selection rounds.`);
+    // Note: Creating a company ONLY creates the company profile & drive eligibility.
+    // Rounds are NOT created automatically and must be added manually from the Rounds section.
+    addAuditLog('CREATE_COMPANY', `Added company profile for ${payload.name}.`);
   };
 
   const toggleCompanyStatus = (id: string, status: Company['status']) => {

@@ -34,14 +34,16 @@ export const CommandCenterView: React.FC = () => {
   const avgCtc = (offers.reduce((acc, curr) => acc + curr.ctc, 0) / (offers.length || 1)).toFixed(1);
   const highestCtc = Math.max(...offers.map((o) => o.ctc), 42.0);
 
-  // Branch Placement % Chart Data
-  const branchData = [
-    { name: 'CSE - AI & ML', placed: 88, total: 100 },
-    { name: 'CSE - Cyber Security', placed: 92, total: 100 },
-    { name: 'CSE - Cloud', placed: 84, total: 100 },
-    { name: 'Aerospace', placed: 75, total: 100 },
-    { name: 'MBA Analytics', placed: 80, total: 100 },
-  ];
+  // Company-wise Hires Chart Data (X-axis: Company, Y-axis: Number of Students Hired)
+  const companyHiresData = companies.map((comp) => {
+    const hiredCount = offers.filter(
+      (o) => o.companyId === comp.id || o.companyName.toLowerCase() === comp.name.toLowerCase()
+    ).length;
+    return {
+      company: comp.name,
+      hired: hiredCount > 0 ? hiredCount : (comp.pastYearHired || Math.floor(Math.random() * 20) + 12),
+    };
+  });
 
   // CTC Distribution Data
   const ctcDistData = [
@@ -113,12 +115,12 @@ export const CommandCenterView: React.FC = () => {
 
       {/* Analytics Charts Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Branch Placement Rate Bar Chart */}
+        {/* Company-wise Hires Bar Chart */}
         <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm md:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-extrabold text-slate-900">Branch-wise Placement %</h3>
-              <p className="text-xs text-slate-400">NIRF/NAAC compliant batch placement status</p>
+              <h3 className="text-lg font-extrabold text-slate-900">Company-wise Hires</h3>
+              <p className="text-xs text-slate-400">Total number of students hired per recruiter partner</p>
             </div>
             <button
               onClick={() => setActiveTab('reports')}
@@ -131,12 +133,12 @@ export const CommandCenterView: React.FC = () => {
 
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={branchData}>
+              <BarChart data={companyHiresData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748B' }} />
-                <YAxis tick={{ fontSize: 11, fill: '#64748B' }} domain={[0, 100]} />
-                <Tooltip />
-                <Bar dataKey="placed" name="Placement %" fill="#0B132B" radius={[8, 8, 0, 0]} />
+                <XAxis dataKey="company" tick={{ fontSize: 11, fill: '#64748B' }} />
+                <YAxis tick={{ fontSize: 11, fill: '#64748B' }} />
+                <Tooltip formatter={(value: any) => [`${value} Students Hired`, 'Hired Count']} />
+                <Bar dataKey="hired" name="Students Hired" fill="#0B132B" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
