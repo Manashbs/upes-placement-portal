@@ -5,7 +5,7 @@ import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { QRScannerModal } from '../modals/QRScannerModal';
 import { Round, Student } from '../../types';
-import { exportRosterExcel } from '../../utils/excelUtils';
+import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
   const { rounds, roundStudents, manualAttendanceOverride, createRound } = usePortal();
@@ -48,8 +48,8 @@ export const AttendanceView: React.FC = () => {
   };
 
   const handleCopyRosterLink = (studentSapId: string) => {
-    const rosterUrl = `${window.location.origin}/#roster-${selectedRoundId}-${studentSapId}`;
-    navigator.clipboard.writeText(rosterUrl);
+    const scanUrl = generateCandidateAttendanceLink(selectedRoundId, studentSapId);
+    navigator.clipboard.writeText(scanUrl);
     setCopiedLinkId(studentSapId);
     setTimeout(() => setCopiedLinkId(null), 2000);
   };
@@ -181,16 +181,16 @@ export const AttendanceView: React.FC = () => {
           {selectedRound && (
             <div className="flex items-center space-x-3">
               <button
-                onClick={() => exportRosterExcel(selectedRound.companyName, selectedRound.name, currentRoundStudents, 'STANDARD', 'xlsx')}
-                className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                onClick={() => exportAnnotatedAttendanceExcel(selectedRound.companyName, selectedRound.name, selectedRound.id, currentRoundStudents, 'xlsx')}
+                className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
               >
                 <FileSpreadsheet className="w-4 h-4 text-white" />
-                <span>Export Excel (.xlsx)</span>
+                <span>Download Attendance Report (.xlsx)</span>
               </button>
 
               <button
-                onClick={() => exportRosterExcel(selectedRound.companyName, selectedRound.name, currentRoundStudents, 'STANDARD', 'csv')}
-                className="inline-flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold px-3.5 py-2 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                onClick={() => exportAnnotatedAttendanceExcel(selectedRound.companyName, selectedRound.name, selectedRound.id, currentRoundStudents, 'csv')}
+                className="inline-flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold px-3.5 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
               >
                 <FileSpreadsheet className="w-4 h-4 text-amber-400" />
                 <span>Export CSV (.csv)</span>

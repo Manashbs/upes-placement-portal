@@ -148,9 +148,14 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
             </div>
 
             {/* Headers found log */}
-            <div className="text-[11px] text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200">
-              <span className="font-bold text-slate-700">Detected Recruiter Columns: </span>
-              {parseResult.headersFound.join(', ')}
+            <div className="text-[11px] text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1">
+              <div>
+                <span className="font-bold text-slate-800">Detected Recruiter Columns: </span>
+                <span className="font-mono text-slate-600">{parseResult.headersFound.join(', ')}</span>
+              </div>
+              <div className="text-[10px] text-emerald-700 font-extrabold pt-0.5">
+                ✓ Smart Extractor matched candidate data & generated personalized mobile Attendance Links for each student.
+              </div>
             </div>
 
             <div className="pt-2 flex items-center justify-end space-x-3">

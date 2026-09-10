@@ -13,8 +13,18 @@ import { SettingsView } from './components/views/SettingsView';
 import { StudentPortalView } from './components/views/StudentPortalView';
 import { SPRPortalView } from './components/views/SPRPortalView';
 
+import { CandidateMobileScanView } from './components/views/CandidateMobileScanView';
+
 const MainContent: React.FC = () => {
   const { activeTab, currentRole } = usePortal();
+
+  // Check if candidate opened personalized attendance link with action=scan
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const isScanAction = urlParams?.get('action') === 'scan';
+
+  if (isScanAction) {
+    return <CandidateMobileScanView />;
+  }
 
   const renderActiveView = () => {
     // If student role selected

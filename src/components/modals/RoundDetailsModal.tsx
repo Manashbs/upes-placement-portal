@@ -16,7 +16,7 @@ import {
   UserCheck,
   ShieldCheck,
 } from 'lucide-react';
-import { exportRosterExcel } from '../../utils/excelUtils';
+import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink } from '../../utils/excelUtils';
 
 interface RoundDetailsModalProps {
   round: Round | null;
@@ -233,7 +233,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                       <th className="p-2.5">SAP ID</th>
                       <th className="p-2.5">NAME</th>
                       <th className="p-2.5">BRANCH</th>
-                      <th className="p-2.5">PANEL</th>
+                      <th className="p-2.5">ATTENDANCE LINK</th>
                       <th className="p-2.5">STATUS</th>
                     </tr>
                   </thead>
@@ -243,7 +243,16 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                         <td className="p-2.5 font-mono font-bold text-slate-800">{st.sapId}</td>
                         <td className="p-2.5 font-extrabold text-slate-900">{st.studentName}</td>
                         <td className="p-2.5 text-slate-500">{st.branch}</td>
-                        <td className="p-2.5 text-slate-600 font-medium">{st.panelNumber || 'Panel 1'}</td>
+                        <td className="p-2.5 font-mono text-[10px] text-amber-700">
+                          <a
+                            href={generateCandidateAttendanceLink(round.id, st.sapId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="underline hover:text-amber-900 font-bold"
+                          >
+                            🔗 Candidate Mobile Scanner Link
+                          </a>
+                        </td>
                         <td className="p-2.5">
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
@@ -273,11 +282,11 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
         {/* Sticky Modal Action Buttons Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 shrink-0 bg-slate-50/50">
           <button
-            onClick={() => exportRosterExcel(round.companyName, round.name, currentRoundStudents, 'STANDARD')}
+            onClick={() => exportAnnotatedAttendanceExcel(round.companyName, round.name, round.id, currentRoundStudents)}
             className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-blue-600" />
-            <span>Export Roster Excel</span>
+            <span>Download Attendance Report (.xlsx)</span>
           </button>
 
           <div className="flex items-center space-x-3">

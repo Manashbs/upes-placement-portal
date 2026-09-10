@@ -16,8 +16,13 @@ export interface MatchedCandidate {
 export interface FuzzyParseResult {
   totalRows: number;
   matchedStudents: MatchedCandidate[];
-  unmatchedRows: { applicantId: string; name: string; email: string; phone: string; raw: any }[];
+  unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[];
   headersFound: string[];
+}
+
+export function generateCandidateAttendanceLink(roundId: string, sapId: string): string {
+  const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://upes-placement-portal.vercel.app';
+  return `${origin}/?action=scan&roundId=${encodeURIComponent(roundId)}&sapId=${encodeURIComponent(sapId)}`;
 }
 
 export function parseShortlistExcel(
@@ -48,13 +53,14 @@ export function parseShortlistExcel(
     );
   };
 
-  const emailKey = findHeaderKey(['primary email', 'email id', 'candidate email', 'applicant email', 'email', 'mail']);
-  const nameKey = findHeaderKey(['candidate name', 'applicant name', 'student name', 'full name', 'name']);
-  const phoneKey = findHeaderKey(['mobile', 'phone', 'contact']);
-  const idKey = findHeaderKey(['applicant id', 'candidate id', 'registration no', 'reg no', 'sap id', 'sapid', 'roll no']);
+  const emailKey = findHeaderKey(['primary email', 'email id', 'candidate email', 'applicant email', 'email', 'mail', 'e-mail']);
+  const nameKey = findHeaderKey(['candidate name', 'applicant name', 'student name', 'full name', 'name', 'student', 'candidate', 'person']);
+  const phoneKey = findHeaderKey(['mobile number', 'mobile no', 'mobile', 'phone number', 'phone no', 'phone', 'contact', 'cell']);
+  const idKey = findHeaderKey(['applicant id', 'candidate id', 'registration id', 'reg id', 'reg no', 'registration no', 'sap id', 'sapid', 'roll no', 'urn', 'app no', 'student id', 'id']);
+  const branchKey = findHeaderKey(['branch', 'department', 'stream', 'course', 'discipline', 'specialization', 'program']);
 
   const matchedStudents: MatchedCandidate[] = [];
-  const unmatchedRows: { applicantId: string; name: string; email: string; phone: string; raw: any }[] = [];
+  const unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[] = [];
 
   // Build lookup maps from Master DB
   const masterMapByEmail = new Map<string, Student>();
@@ -74,6 +80,7 @@ export function parseShortlistExcel(
     const rawName = nameKey ? String(row[nameKey]).trim() : '';
     const rawPhone = phoneKey ? String(row[phoneKey]).trim() : '';
     const rawId = idKey ? String(row[idKey]).trim() : '';
+    const rawBranch = branchKey ? String(row[branchKey]).trim() : 'B.Tech CSE';
 
     let matchedStudent: Student | undefined;
     let matchType: MatchedCandidate['matchType'] = 'EMAIL_MATCH';
@@ -116,7 +123,8 @@ export function parseShortlistExcel(
         applicantId: rawId || `REC-${Math.floor(Math.random() * 9000) + 1000}`,
         name: rawName || 'Recruiter Candidate',
         email: rawEmail || `candidate${idx}@recruiter.com`,
-        phone: rawPhone || '+91 99999 00000',
+        phone: rawPhone || '+91 98765 43210',
+        branch: rawBranch,
         raw: row,
       });
     }
@@ -146,16 +154,17 @@ export function exportRosterExcel(
   const exportData = filtered.map((s, index) => {
     const base: any = {
       'S.No': index + 1,
-      'SAP ID': s.sapId,
-      Name: s.studentName,
-      Branch: s.branch,
-      Phone: s.phone,
+      'SAP / Candidate ID': s.sapId,
+      'Student Name': s.studentName,
+      'Branch': s.branch,
+      'Phone': s.phone,
     };
 
     if (type !== 'RECRUITER') {
       base['Email'] = s.email;
       base['Shortlist Status'] = s.shortlistStatus;
-      base['Attendance'] = s.attendanceStatus;
+      base['Attendance Link'] = generateCandidateAttendanceLink(s.roundId, s.sapId);
+      base['Attendance Status'] = s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT';
       base['Attendance Time'] = s.attendanceTime || '--';
       base['Marked By'] = s.markedBy || '--';
     }
@@ -169,5 +178,35 @@ export function exportRosterExcel(
 
   const ext = format === 'csv' ? 'csv' : 'xlsx';
   const fileName = `UPES_${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Roster.${ext}`;
+  XLSX.writeFile(workbook, fileName, { bookType: ext as any });
+}
+
+export function exportAnnotatedAttendanceExcel(
+  companyName: string,
+  roundName: string,
+  roundId: string,
+  roundStudents: RoundStudent[],
+  format: 'xlsx' | 'csv' = 'xlsx'
+) {
+  const exportData = roundStudents.map((s, index) => {
+    return {
+      'S.No': index + 1,
+      'SAP / Reg ID': s.sapId,
+      'Student Name': s.studentName,
+      'Branch / Department': s.branch,
+      'Email': s.email,
+      'Phone': s.phone,
+      'Attendance Link': generateCandidateAttendanceLink(roundId, s.sapId),
+      'Attendance Status': s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT',
+      'Attendance Marked Time': s.attendanceTime || '--',
+    };
+  });
+
+  const worksheet = XLSX.utils.json_to_sheet(exportData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Attendance Report`);
+
+  const ext = format === 'csv' ? 'csv' : 'xlsx';
+  const fileName = `UPES_${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Attendance_Report.${ext}`;
   XLSX.writeFile(workbook, fileName, { bookType: ext as any });
 }
