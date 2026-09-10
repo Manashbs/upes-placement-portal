@@ -272,9 +272,9 @@ export const CompaniesView: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="text-[11px] text-slate-600 italic bg-white p-2.5 rounded-xl border border-amber-100">
+                    <div className="text-[11px] text-slate-600 italic bg-white p-2.5 rounded-xl border border-amber-100 leading-relaxed">
                       <MessageSquare className="w-3 h-3 text-amber-600 inline mr-1" />
-                      "Strong candidate pool. High domain performance in final interviews."
+                      "{comp.recruiterFeedback || 'Strong candidate pool. High technical domain performance across selection rounds.'}"
                     </div>
 
                     {/* Delete if Completed option */}

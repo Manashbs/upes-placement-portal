@@ -65,6 +65,7 @@ interface PortalContextType {
   addCompany: (payload: ComprehensiveCompanyPayload) => void;
   deleteCompany: (id: string) => void;
   toggleCompanyStatus: (id: string, status: Company['status']) => void;
+  updateCompanyFeedback: (companyId: string, feedback: string) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
   markAttendance: (roundId: string, sapId: string, method?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
@@ -210,6 +211,13 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       prev.map((c) => (c.id === id ? { ...c, status } : c))
     );
     addAuditLog('UPDATE_COMPANY_STATUS', `Changed company status to ${status}.`);
+  };
+
+  const updateCompanyFeedback = (companyId: string, feedback: string) => {
+    setCompanies((prev) =>
+      prev.map((c) => (c.id === companyId ? { ...c, recruiterFeedback: feedback } : c))
+    );
+    addAuditLog('UPDATE_COMPANY_FEEDBACK', `Updated recruiter feedback for company ${companyId}.`);
   };
 
   const createRound = (roundData: Partial<Round>, shortlistedStudents: Student[]) => {
@@ -518,6 +526,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         addCompany,
         deleteCompany,
         toggleCompanyStatus,
+        updateCompanyFeedback,
         createRound,
         markAttendance,
         manualAttendanceOverride,

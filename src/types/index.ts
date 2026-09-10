@@ -39,6 +39,8 @@ export interface Company {
   activeDrivesCount: number;
   hrContact: { name: string; email: string; phone: string };
   pastYearHired?: number;
+  recruiterFeedback?: string;
+  totalStudentsSat?: number;
 }
 
 export type RoundType = 

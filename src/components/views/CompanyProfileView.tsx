@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Company, Round, RoundType } from '../../types';
+import { Company, Round, RoundType, RoundMode } from '../../types';
 import {
   ArrowLeft,
   FileText,
@@ -9,14 +9,14 @@ import {
   Plus,
   Clock,
   MapPin,
-  Users,
-  Award,
   MessageSquare,
   Calendar,
   X,
   Layers,
   CheckCircle2,
+  Save,
 } from 'lucide-react';
+import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 
 interface CompanyProfileViewProps {
   company: Company;
@@ -24,20 +24,31 @@ interface CompanyProfileViewProps {
 }
 
 export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company, onBack }) => {
-  const { drives, rounds, offers, deleteCompany, createRound, sprs, students } = usePortal();
+  const { drives, rounds, offers, deleteCompany, createRound, updateCompanyFeedback, sprs, students } = usePortal();
 
   // Modals
   const [showAddRoundModal, setShowAddRoundModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showExcelUpload, setShowExcelUpload] = useState(false);
 
-  // New Round Form State
+  // Round Form State matching Screenshot 1 (RoundsView modal)
   const [roundName, setRoundName] = useState('');
   const [roundType, setRoundType] = useState<RoundType>('TECHNICAL_INTERVIEW');
-  const [venue, setVenue] = useState('Block A - Lab 2');
+  const [roundMode, setRoundMode] = useState<RoundMode>('ON_CAMPUS');
+  const [venue, setVenue] = useState('Block A - Lab 1');
+  const [capacity, setCapacity] = useState<number>(50);
+  const [sprsNeeded, setSprsNeeded] = useState<number>(3);
   const [date, setDate] = useState('2026-09-12');
   const [startTime, setStartTime] = useState('10:00');
-  const [endTime, setEndTime] = useState('12:00');
-  const [shortlistedCount, setShortlistedCount] = useState(50);
+  const [endTime, setEndTime] = useState('13:00');
+  const [shortlistedStudentsTemp, setShortlistedStudentsTemp] = useState<any[]>([]);
+
+  // Company Feedback State
+  const [feedbackText, setFeedbackText] = useState(
+    company.recruiterFeedback ||
+      `${company.name} HR Team reported high satisfaction with UPES student candidates. The candidates displayed strong core domain expertise, problem-solving skills, and professional demeanor throughout the technical and HR rounds.`
+  );
+  const [feedbackSaved, setFeedbackSaved] = useState(false);
 
   // Find drives & rounds for this company
   const companyDrives = drives.filter((d) => d.companyId === company.id || d.companyName === company.name);
@@ -45,7 +56,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const companyOffers = offers.filter((o) => o.companyId === company.id || o.companyName === company.name);
 
   // Calculated metrics
-  const totalStudentsSat = companyRounds.reduce((acc, r) => acc + (r.attendedCount || r.totalShortlisted || 0), 0) || 142;
+  const totalStudentsSat = companyRounds.reduce((acc, r) => acc + (r.attendedCount || r.totalShortlisted || 0), 0) || (company.totalStudentsSat || 142);
   const totalOffersCount = companyOffers.length || (company.status === 'COMPLETED' ? 68 : 8);
 
   const handleDeleteCompany = () => {
@@ -53,9 +64,14 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
     onBack();
   };
 
-  const handleCreateRoundSubmit = (e: React.FormEvent) => {
+  const handleSaveFeedback = () => {
+    updateCompanyFeedback(company.id, feedbackText);
+    setFeedbackSaved(true);
+    setTimeout(() => setFeedbackSaved(false), 3000);
+  };
+
+  const handleFinalizeCreateRound = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!roundName) return;
 
     const driveId = companyDrives[0]?.id || `drv-${company.id}`;
     const roundNumber = companyRounds.length + 1;
@@ -66,25 +82,26 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         companyName: company.name,
         driveId,
         roundNumber,
-        name: roundName,
+        name: roundName || `${roundType} Round`,
         type: roundType,
-        mode: 'ON_CAMPUS',
+        mode: roundMode,
+        venue,
+        capacity,
         date,
         startTime,
         endTime,
-        venue,
-        capacity: 100,
         status: 'SCHEDULED',
-        totalShortlisted: Number(shortlistedCount) || 50,
+        totalShortlisted: shortlistedStudentsTemp.length || capacity || 50,
         attendedCount: 0,
         absentCount: 0,
         assignedSprIds: [],
       },
-      students.slice(0, Number(shortlistedCount) || 50)
+      shortlistedStudentsTemp.length > 0 ? shortlistedStudentsTemp : students.slice(0, capacity || 50)
     );
 
     setShowAddRoundModal(false);
     setRoundName('');
+    setShortlistedStudentsTemp([]);
   };
 
   return (
@@ -109,7 +126,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </button>
       </div>
 
-      {/* Main Header Card matching screenshot 1 */}
+      {/* Main Header Card matching screenshot */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center space-x-5">
           <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-700 font-black text-2xl flex items-center justify-center shadow-xs">
@@ -157,7 +174,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       </div>
 
-      {/* RELATIONSHIP SNAPSHOT Card matching screenshot 1 */}
+      {/* RELATIONSHIP SNAPSHOT Card */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm space-y-6">
         <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase">
           RELATIONSHIP SNAPSHOT
@@ -184,7 +201,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       </div>
 
-      {/* OPEN ROLES Card matching screenshot 1 */}
+      {/* OPEN ROLES Card */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase">
@@ -216,7 +233,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       </div>
 
-      {/* SELECTION ROUNDS MONITOR SECTION (Requirement #1) */}
+      {/* SELECTION ROUNDS MONITOR SECTION */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -333,7 +350,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         )}
       </div>
 
-      {/* HIRING HISTORY Card matching screenshot 2 */}
+      {/* HIRING HISTORY Card */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -348,7 +365,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           </span>
         </div>
 
-        {/* Drives Table matching screenshot 2 */}
+        {/* Drives Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="border-b border-slate-100 text-slate-400 font-extrabold uppercase tracking-wider">
@@ -405,200 +422,251 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
       </div>
 
-      {/* COMPLETED DRIVE SUMMARY & RECRUITER FEEDBACK (Requirement #4) */}
-      {company.status === 'COMPLETED' && (
-        <div className="bg-gradient-to-br from-amber-50/90 via-orange-50/40 to-slate-50 rounded-3xl p-8 border border-amber-200/80 shadow-md space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block animate-pulse" />
-              <span className="text-xs font-extrabold uppercase tracking-widest text-amber-900">
-                COMPLETED RECRUITMENT DRIVE SUMMARY
-              </span>
-            </div>
-
-            <span className="bg-emerald-100 text-emerald-800 font-extrabold text-xs px-3 py-1 rounded-full border border-emerald-200">
-              ✓ Process Concluded
+      {/* RECRUITER FEEDBACK & PROCESS SUMMARY SECTION */}
+      <div className="bg-gradient-to-br from-amber-50/90 via-orange-50/40 to-slate-50 rounded-3xl p-8 border border-amber-200/80 shadow-md space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <span className="w-3 h-3 rounded-full bg-amber-500 inline-block animate-pulse" />
+            <span className="text-xs font-extrabold uppercase tracking-widest text-amber-900">
+              RECRUITER FEEDBACK & PROCESS SUMMARY
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Total Students Sat (All Rounds)
-              </span>
-              <div className="text-3xl font-black text-slate-900">{totalStudentsSat}</div>
-            </div>
+          <span
+            className={`font-extrabold text-xs px-3 py-1 rounded-full border ${
+              company.status === 'COMPLETED'
+                ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                : 'bg-amber-100 text-amber-800 border-amber-200'
+            }`}
+          >
+            • {company.status}
+          </span>
+        </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Offers Extended
-              </span>
-              <div className="text-3xl font-black text-emerald-600">{totalOffersCount}</div>
-            </div>
-
-            <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                Conversion Rate
-              </span>
-              <div className="text-3xl font-black text-amber-600">
-                {Math.round((totalOffersCount / (totalStudentsSat || 1)) * 100)}%
-              </div>
-            </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Total Students Sat (All Rounds)
+            </span>
+            <div className="text-3xl font-black text-slate-900">{totalStudentsSat}</div>
           </div>
 
-          {/* Recruiter Feedback */}
-          <div className="bg-white p-6 rounded-2xl border border-amber-100 space-y-2">
+          <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Offers Extended
+            </span>
+            <div className="text-3xl font-black text-emerald-600">{totalOffersCount}</div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-amber-100 shadow-xs space-y-1">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Conversion Rate
+            </span>
+            <div className="text-3xl font-black text-amber-600">
+              {Math.round((totalOffersCount / (totalStudentsSat || 1)) * 100)}%
+            </div>
+          </div>
+        </div>
+
+        {/* Recruiter Feedback Textarea & Save Action */}
+        <div className="bg-white p-6 rounded-2xl border border-amber-100 space-y-3">
+          <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2 text-xs font-bold text-amber-900">
               <MessageSquare className="w-4 h-4 text-amber-600" />
-              <span>Official Recruiter Feedback:</span>
+              <span>Official Recruiter Feedback Given by {company.name}:</span>
             </div>
-            <p className="text-xs font-medium text-slate-700 italic leading-relaxed">
-              "{company.name} HR Team reported high satisfaction with UPES student candidates. The candidates displayed strong core domain expertise, problem-solving skills, and professional demeanor throughout the technical and HR rounds."
-            </p>
+
+            {feedbackSaved && (
+              <span className="text-xs font-bold text-emerald-600 flex items-center space-x-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Feedback Saved!</span>
+              </span>
+            )}
           </div>
 
-          {/* Delete if Completed Option at Bottom */}
-          <div className="flex items-center justify-between pt-2 border-t border-amber-200/60">
-            <span className="text-xs text-slate-500 font-semibold">
-              Drive completed. Remove company profile from active portal?
-            </span>
+          <textarea
+            rows={3}
+            value={feedbackText}
+            onChange={(e) => setFeedbackText(e.target.value)}
+            placeholder="Enter candidate evaluation feedback, technical ratings, or overall process review..."
+            className="w-full bg-slate-50 text-slate-800 text-xs font-medium rounded-xl p-3 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none leading-relaxed"
+          />
+
+          <div className="flex justify-end">
             <button
-              onClick={() => setShowDeleteConfirm(true)}
-              className="inline-flex items-center space-x-2 bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold px-5 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+              onClick={handleSaveFeedback}
+              className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-xs px-4 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
             >
-              <Trash2 className="w-4 h-4" />
-              <span>Delete Completed Drive</span>
+              <Save className="w-3.5 h-3.5" />
+              <span>Save Recruiter Feedback</span>
             </button>
           </div>
         </div>
-      )}
 
-      {/* Add Round Modal */}
+        {/* Delete if Completed Option at Bottom */}
+        <div className="flex items-center justify-between pt-2 border-t border-amber-200/60">
+          <span className="text-xs text-slate-500 font-semibold">
+            {company.status === 'COMPLETED'
+              ? 'Drive completed. Delete completed company drive record?'
+              : 'Delete company profile and active drive processes?'}
+          </span>
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center space-x-2 bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold px-5 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>{company.status === 'COMPLETED' ? 'Delete If Completed' : 'Delete Company'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Add Round Modal matching Screenshot 1 EXACTLY */}
       {showAddRoundModal && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 border border-slate-100">
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 border border-slate-100 my-8">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-lg font-extrabold text-slate-900">
-                  Add Selection Round for {company.name}
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Create a new round to track attendance and assign SPR duties
-                </p>
-              </div>
+              <h3 className="text-lg font-extrabold text-slate-900">
+                Schedule Drive Round & Allocate SPRs
+              </h3>
               <button
                 onClick={() => setShowAddRoundModal(false)}
-                className="p-1 rounded-full text-slate-400 hover:text-slate-600"
+                className="text-slate-400 font-bold hover:text-slate-600"
               >
-                <X className="w-5 h-5" />
+                ✕
               </button>
             </div>
 
-            <form onSubmit={handleCreateRoundSubmit} className="space-y-4">
+            <form onSubmit={handleFinalizeCreateRound} className="space-y-3 text-xs">
+              {/* Target Company dropdown (pre-selected for this company) */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Round Title / Process Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Technical Interview Round 1"
-                  value={roundName}
-                  onChange={(e) => setRoundName(e.target.value)}
-                  className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-3 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                />
+                <label className="font-bold text-slate-700 block mb-1">Target Company</label>
+                <select
+                  disabled
+                  value={company.id}
+                  className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800"
+                >
+                  <option value={company.id}>{company.name} ({company.category})</option>
+                </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              {/* Round Title & Round Category Grid matching Screenshot 1 */}
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Round Type
-                  </label>
+                  <label className="font-bold text-slate-700 block mb-1">Round Title</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Technical Interview"
+                    value={roundName}
+                    onChange={(e) => setRoundName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Round Category</label>
                   <select
                     value={roundType}
                     onChange={(e) => setRoundType(e.target.value as RoundType)}
-                    className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-3 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                   >
-                    <option value="ONLINE_TEST">Online Assessment</option>
-                    <option value="CODING">Coding Test</option>
+                    <option value="PPT">Pre-Placement Talk (PPT)</option>
+                    <option value="ONLINE_TEST">Online Aptitude Test</option>
+                    <option value="CODING">Coding Assessment</option>
+                    <option value="GD">Group Discussion (GD)</option>
                     <option value="TECHNICAL_INTERVIEW">Technical Interview</option>
                     <option value="HR_INTERVIEW">HR Interview</option>
-                    <option value="GD">Group Discussion</option>
-                    <option value="PPT">Pre-Placement Talk</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Venue Location & Mode Grid matching Screenshot 1 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Venue Location</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Block A - Lab 1"
+                    value={venue}
+                    onChange={(e) => setVenue(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  />
+                </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Shortlisted Students Count
-                  </label>
+                  <label className="font-bold text-slate-700 block mb-1">Mode</label>
+                  <select
+                    value={roundMode}
+                    onChange={(e) => setRoundMode(e.target.value as RoundMode)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  >
+                    <option value="ON_CAMPUS">On Campus</option>
+                    <option value="VIRTUAL">Virtual</option>
+                    <option value="HYBRID">Hybrid</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Number of SPRs Needed & Room Capacity Grid matching Screenshot 1 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Number of SPRs Needed</label>
                   <input
                     type="number"
-                    value={shortlistedCount}
-                    onChange={(e) => setShortlistedCount(Number(e.target.value))}
-                    className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-3 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Venue / Location *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={venue}
-                  onChange={(e) => setVenue(e.target.value)}
-                  className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-3 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Date</label>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-2.5 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    min={1}
+                    max={10}
+                    value={sprsNeeded}
+                    onChange={(e) => setSprsNeeded(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Start Time</label>
+                  <label className="font-bold text-slate-700 block mb-1">Room Capacity</label>
                   <input
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-2 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">End Time</label>
-                  <input
-                    type="time"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                    className="w-full bg-slate-50 text-slate-900 text-xs rounded-xl px-2 py-2 border border-slate-200 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    type="number"
+                    value={capacity}
+                    onChange={(e) => setCapacity(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
                   />
                 </div>
               </div>
 
-              <div className="flex justify-end space-x-3 pt-3 border-t border-slate-100">
+              {/* Shortlist Candidate Roster Excel card matching Screenshot 1 */}
+              <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-2xl flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-amber-900">Shortlist Candidate Roster</div>
+                  <div className="text-[11px] text-amber-700">
+                    {shortlistedStudentsTemp.length > 0
+                      ? `${shortlistedStudentsTemp.length} candidates loaded from recruiter sheet`
+                      : 'Upload recruiter Excel sheet (reads Name/Email)'}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowExcelUpload(true)}
+                  className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold px-3.5 py-2 rounded-xl text-xs shadow-xs cursor-pointer"
+                >
+                  Upload Excel
+                </button>
+              </div>
+
+              {/* Footer action buttons matching Screenshot 1 */}
+              <div className="pt-3 flex justify-end space-x-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setShowAddRoundModal(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                  className="px-4 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-extrabold rounded-xl shadow-md cursor-pointer"
+                  className="px-5 py-2.5 bg-[#0B132B] hover:bg-slate-800 text-white font-bold rounded-xl shadow-md cursor-pointer"
                 >
-                  Create Selection Round
+                  Create & Launch Selection Round
                 </button>
               </div>
             </form>
@@ -640,6 +708,16 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           </div>
         </div>
       )}
+
+      {/* Excel Upload Modal */}
+      <ExcelUploadModal
+        isOpen={showExcelUpload}
+        onClose={() => setShowExcelUpload(false)}
+        onShortlistValidated={(validStudents) => {
+          setShortlistedStudentsTemp(validStudents);
+          setShowExcelUpload(false);
+        }}
+      />
     </div>
   );
 };
