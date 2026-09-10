@@ -19,6 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
+import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 
 interface CompanyProfileViewProps {
   company: Company;
@@ -33,6 +34,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
 
   // Completion Form Inputs
   const [completionSatCount, setCompletionSatCount] = useState<number>(company.totalStudentsSat || 120);
@@ -309,7 +311,8 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
               return (
                 <div
                   key={rnd.id}
-                  className="bg-slate-50/70 rounded-2xl p-5 border border-slate-200/70 space-y-4 hover:border-amber-400/50 transition-all"
+                  onClick={() => setSelectedRoundForDetails(rnd)}
+                  className="bg-slate-50/70 rounded-2xl p-5 border border-slate-200/70 space-y-4 hover:border-amber-500 hover:bg-white hover:shadow-md transition-all cursor-pointer group"
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -824,6 +827,12 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           setShortlistedStudentsTemp(validStudents);
           setShowExcelUpload(false);
         }}
+      />
+
+      {/* Round Details Modal */}
+      <RoundDetailsModal
+        round={selectedRoundForDetails}
+        onClose={() => setSelectedRoundForDetails(null)}
       />
     </div>
   );

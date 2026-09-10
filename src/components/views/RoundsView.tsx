@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2 } from 'lucide-react';
+import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2, ChevronRight } from 'lucide-react';
 import { Round, RoundType, RoundMode } from '../../types';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
+import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 import { exportRosterExcel } from '../../utils/excelUtils';
 
 export const RoundsView: React.FC = () => {
   const { rounds, companies, createRound, roundStudents } = usePortal();
   const [activeTab, setActiveTab] = useState<'ALL' | 'LIVE' | 'UPCOMING' | 'COMPLETED'>('ALL');
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
+  const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
@@ -179,17 +181,18 @@ export const RoundsView: React.FC = () => {
           return (
             <div
               key={round.id}
-              className={`bg-white rounded-3xl p-6 border shadow-sm transition-all relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6 ${
+              onClick={() => setSelectedRoundForDetails(round)}
+              className={`bg-white rounded-3xl p-6 border shadow-sm transition-all relative overflow-hidden flex flex-col md:flex-row items-start md:items-center justify-between gap-6 cursor-pointer group hover:border-amber-400 hover:shadow-md ${
                 isLive
                   ? 'border-amber-200 ring-1 ring-amber-300/80 shadow-md'
-                  : 'border-slate-100 hover:border-slate-200'
+                  : 'border-slate-100'
               }`}
             >
               <div className={`absolute left-0 top-6 bottom-6 w-1.5 rounded-r-full ${accentColor}`} />
 
               <div className="pl-4 min-w-[240px]">
                 <div className="flex items-center space-x-2">
-                  <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                  <h3 className="text-xl font-extrabold text-slate-900 tracking-tight group-hover:text-amber-600 transition-colors">
                     {round.companyName}
                   </h3>
                   <span
@@ -243,7 +246,10 @@ export const RoundsView: React.FC = () => {
 
               <div className="flex items-center space-x-2 shrink-0">
                 <button
-                  onClick={() => setSelectedRoundForQR(round)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedRoundForQR(round);
+                  }}
                   className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold transition-colors cursor-pointer"
                   title="View Round QR Code"
                 >
@@ -251,7 +257,8 @@ export const RoundsView: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setSelectedRoundForUpload(round);
                     setShowExcelUpload(true);
                   }}
@@ -262,7 +269,10 @@ export const RoundsView: React.FC = () => {
                 </button>
 
                 <button
-                  onClick={() => exportRosterExcel(round.companyName, round.name, currentStudents, 'STANDARD')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    exportRosterExcel(round.companyName, round.name, currentStudents, 'STANDARD');
+                  }}
                   className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold transition-colors cursor-pointer"
                   title="Export Round Roster Excel"
                 >
@@ -454,6 +464,17 @@ export const RoundsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Round Details & SPR Allocation Modal */}
+      <RoundDetailsModal
+        round={selectedRoundForDetails}
+        onClose={() => setSelectedRoundForDetails(null)}
+        onOpenQRModal={(r) => setSelectedRoundForQR(r)}
+        onOpenUploadModal={(r) => {
+          setSelectedRoundForUpload(r);
+          setShowExcelUpload(true);
+        }}
+      />
 
       {/* QR Control Modal */}
       <RoundQRControlModal round={selectedRoundForQR} onClose={() => setSelectedRoundForQR(null)} />
