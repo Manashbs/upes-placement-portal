@@ -32,9 +32,9 @@ export function parseShortlistExcel(
   const workbook = XLSX.read(fileData, { type: 'array' });
   const firstSheetName = workbook.SheetNames[0];
   const worksheet = workbook.Sheets[firstSheetName];
-  const jsonData: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
 
-  if (!jsonData || jsonData.length === 0) {
+  if (!rawRows || rawRows.length === 0) {
     return {
       totalRows: 0,
       matchedStudents: [],
@@ -43,26 +43,48 @@ export function parseShortlistExcel(
     };
   }
 
-  const sampleRow = jsonData[0];
-  const headersFound = Object.keys(sampleRow);
+  // 1. Scan for Header Row dynamically across rows 0-10
+  let headerRowIndex = 0;
+  const idKeywords = ['sap', 'reg', 'applicant', 'candidate', 'roll', 'urn', 'id', 'no', 'code', 's.no', 'sn', 'sl'];
+  const nameKeywords = ['name', 'candidate', 'applicant', 'student', 'full name', 'person'];
+  const emailKeywords = ['email', 'mail', 'e-mail'];
+  const phoneKeywords = ['phone', 'mobile', 'contact', 'cell', 'number'];
+  const branchKeywords = ['branch', 'department', 'dept', 'stream', 'course', 'discipline', 'program', 'specialization'];
 
-  // Helper to find header key by fuzzy matching
-  const findHeaderKey = (possibleNames: string[]) => {
-    return headersFound.find((h) =>
-      possibleNames.some((p) => h.toLowerCase().trim().includes(p.toLowerCase()))
-    );
+  for (let i = 0; i < Math.min(10, rawRows.length); i++) {
+    const rowStr = rawRows[i].map((c) => String(c).toLowerCase()).join(' ');
+    const hasName = nameKeywords.some((k) => rowStr.includes(k));
+    const hasId = idKeywords.some((k) => rowStr.includes(k));
+    const hasEmail = emailKeywords.some((k) => rowStr.includes(k));
+    const hasBranch = branchKeywords.some((k) => rowStr.includes(k));
+
+    if ((hasName && (hasId || hasEmail || hasBranch)) || (hasId && hasEmail)) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  const headerRow = rawRows[headerRowIndex].map((h) => String(h).trim());
+  const headersFound = headerRow.filter(Boolean);
+
+  // Helper to locate column index by header name keywords
+  const findColIndex = (keywords: string[]) => {
+    return headerRow.findIndex((h) => {
+      const lower = h.toLowerCase();
+      return keywords.some((k) => lower.includes(k));
+    });
   };
 
-  const emailKey = findHeaderKey(['primary email', 'email id', 'candidate email', 'applicant email', 'email', 'mail', 'e-mail']);
-  const nameKey = findHeaderKey(['candidate name', 'applicant name', 'student name', 'full name', 'name', 'student', 'candidate', 'person']);
-  const phoneKey = findHeaderKey(['mobile number', 'mobile no', 'mobile', 'phone number', 'phone no', 'phone', 'contact', 'cell']);
-  const idKey = findHeaderKey(['applicant id', 'candidate id', 'registration id', 'reg id', 'reg no', 'registration no', 'sap id', 'sapid', 'roll no', 'urn', 'app no', 'student id', 'id']);
-  const branchKey = findHeaderKey(['branch', 'department', 'stream', 'course', 'discipline', 'specialization', 'program']);
+  const idCol = findColIndex(idKeywords);
+  const nameCol = findColIndex(nameKeywords);
+  const emailCol = findColIndex(emailKeywords);
+  const phoneCol = findColIndex(phoneKeywords);
+  const branchCol = findColIndex(branchKeywords);
 
   const matchedStudents: MatchedCandidate[] = [];
   const unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[] = [];
 
-  // Build lookup maps from Master DB
+  // Build Master DB Lookup Maps
   const masterMapByEmail = new Map<string, Student>();
   const masterMapByName = new Map<string, Student>();
   const masterMapByPhone = new Map<string, Student>();
@@ -75,33 +97,34 @@ export function parseShortlistExcel(
     if (s.sapId) masterMapBySap.set(s.sapId.trim(), s);
   });
 
-  jsonData.forEach((row, idx) => {
-    const rawEmail = emailKey ? String(row[emailKey]).trim() : '';
-    const rawName = nameKey ? String(row[nameKey]).trim() : '';
-    const rawPhone = phoneKey ? String(row[phoneKey]).trim() : '';
-    const rawId = idKey ? String(row[idKey]).trim() : '';
-    const rawBranch = branchKey ? String(row[branchKey]).trim() : 'B.Tech CSE';
+  // 2. Extract Data Rows starting after headerRowIndex
+  const dataRows = rawRows.slice(headerRowIndex + 1);
+
+  dataRows.forEach((rowArray, idx) => {
+    if (!rowArray || rowArray.every((cell) => String(cell).trim() === '')) return;
+
+    // Extract exact cell values or fallback to column position
+    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
+    const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : String(rowArray[0] || rowArray[1] || '').trim();
+    const rawEmail = emailCol >= 0 && rowArray[emailCol] ? String(rowArray[emailCol]).trim() : '';
+    const rawPhone = phoneCol >= 0 && rowArray[phoneCol] ? String(rowArray[phoneCol]).trim() : '';
+    const rawBranch = branchCol >= 0 && rowArray[branchCol] ? String(rowArray[branchCol]).trim() : 'N/A';
+
+    if (!rawName && !rawEmail && !rawId) return; // Skip invalid blank rows
 
     let matchedStudent: Student | undefined;
     let matchType: MatchedCandidate['matchType'] = 'EMAIL_MATCH';
 
-    // 1. Primary Email Match
     if (rawEmail && masterMapByEmail.has(rawEmail.toLowerCase())) {
       matchedStudent = masterMapByEmail.get(rawEmail.toLowerCase());
       matchType = 'EMAIL_MATCH';
-    }
-    // 2. Candidate Name Match
-    else if (rawName && masterMapByName.has(rawName.toLowerCase())) {
+    } else if (rawName && masterMapByName.has(rawName.toLowerCase())) {
       matchedStudent = masterMapByName.get(rawName.toLowerCase());
       matchType = 'NAME_MATCH';
-    }
-    // 3. SAP ID / Applicant ID Match
-    else if (rawId && masterMapBySap.has(rawId)) {
+    } else if (rawId && masterMapBySap.has(rawId)) {
       matchedStudent = masterMapBySap.get(rawId);
       matchType = 'SAP_MATCH';
-    }
-    // 4. Phone Match
-    else if (rawPhone && masterMapByPhone.has(rawPhone.replace(/\D/g, ''))) {
+    } else if (rawPhone && masterMapByPhone.has(rawPhone.replace(/\D/g, ''))) {
       matchedStudent = masterMapByPhone.get(rawPhone.replace(/\D/g, ''));
       matchType = 'PHONE_MATCH';
     }
@@ -111,27 +134,29 @@ export function parseShortlistExcel(
         student: matchedStudent,
         matchType,
         recruiterData: {
-          applicantId: rawId || `APP-${idx + 100}`,
+          applicantId: rawId || matchedStudent.sapId,
           candidateId: rawId,
           rawName: rawName || matchedStudent.name,
           rawEmail: rawEmail || matchedStudent.email,
           rawPhone: rawPhone || matchedStudent.phone,
         },
       });
-    } else if (rawName || rawEmail || rawId) {
+    } else {
+      // Use exact values from Excel row. NEVER generate fake dummy names or fake SAP IDs!
+      const candidateId = rawId || `REG-2026-${String(idx + 1).padStart(3, '0')}`;
       unmatchedRows.push({
-        applicantId: rawId || `REC-${Math.floor(Math.random() * 9000) + 1000}`,
-        name: rawName || 'Recruiter Candidate',
-        email: rawEmail || `candidate${idx}@recruiter.com`,
-        phone: rawPhone || '+91 98765 43210',
-        branch: rawBranch,
-        raw: row,
+        applicantId: candidateId,
+        name: rawName || `Candidate ${idx + 1}`,
+        email: rawEmail || `${candidateId.toLowerCase()}@upes.ac.in`,
+        phone: rawPhone || 'N/A',
+        branch: rawBranch || 'N/A',
+        raw: rowArray,
       });
     }
   });
 
   return {
-    totalRows: jsonData.length,
+    totalRows: dataRows.filter((r) => r && r.some((c: any) => String(c).trim() !== '')).length,
     matchedStudents,
     unmatchedRows,
     headersFound,

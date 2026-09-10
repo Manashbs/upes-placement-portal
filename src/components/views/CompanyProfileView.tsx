@@ -130,12 +130,9 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         startTime: '09:00',
         endTime: '17:00',
         status: 'SCHEDULED',
-        totalShortlisted: shortlistedStudentsTemp.length || sprsNeeded * 20,
-        attendedCount: 0,
-        absentCount: 0,
-        assignedSprIds: [],
+        sprsNeeded,
       },
-      shortlistedStudentsTemp.length > 0 ? shortlistedStudentsTemp : students.slice(0, sprsNeeded * 20)
+      shortlistedStudentsTemp
     );
 
     setShowAddRoundModal(false);

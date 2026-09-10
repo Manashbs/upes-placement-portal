@@ -154,7 +154,7 @@ export const AttendanceView: React.FC = () => {
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase">Security Check</span>
               <div className="text-3xl font-extrabold text-emerald-600 mt-1">Active</div>
-              <p className="text-xs text-slate-500 mt-1">Geo-fence: {selectedRound.geoFenceEnabled ? '500m Enforced' : 'Off'}</p>
+              <p className="text-xs text-slate-500 mt-1">Single Process QR Enforced</p>
             </div>
             <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold">
               <ShieldCheck className="w-6 h-6 text-amber-400" />

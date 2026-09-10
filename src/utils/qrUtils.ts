@@ -5,7 +5,6 @@ export interface QRTokenData {
   roundName: string;
   timestamp: number;
   expiresAt: number;
-  geoFence: { lat: number; lng: number; radiusMeters: number } | null;
   signature: string;
 }
 
@@ -14,8 +13,7 @@ export function generateRoundQRToken(
   driveId: string,
   companyName: string,
   roundName: string,
-  validityMinutes: number = 30,
-  geoFenceEnabled: boolean = false
+  validityMinutes: number = 60
 ): { token: string; expiresAtIso: string } {
   const now = Date.now();
   const expiresAt = now + validityMinutes * 60 * 1000;
@@ -27,7 +25,6 @@ export function generateRoundQRToken(
     roundName,
     timestamp: now,
     expiresAt,
-    geoFence: geoFenceEnabled ? { lat: 30.4168, lng: 77.9687, radiusMeters: 500 } : null, // UPES Bidholi coordinates
     signature: `UPES-SEC-${roundId.slice(0, 4)}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
   };
 
@@ -45,7 +42,7 @@ export function validateQRToken(tokenString: string): { valid: boolean; message:
     const now = Date.now();
 
     if (now > data.expiresAt) {
-      return { valid: false, message: 'QR Code token has expired. Please ask the SPR to refresh the QR Code.' };
+      return { valid: false, message: 'QR Code token has expired. Please ask the SPR or Placement Cell to refresh the QR Code.' };
     }
 
     if (!data.roundId || !data.signature) {

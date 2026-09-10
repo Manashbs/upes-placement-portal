@@ -238,16 +238,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('FINALIZE_COMPLETED_DRIVE', `Marked company drive ${companyId} as COMPLETED with ${data.offersGivenCount} offers.`);
   };
 
-  const createRound = (roundData: Partial<Round>, shortlistedStudents: Student[]) => {
+  const createRound = (roundData: Partial<Round> & { sprsNeeded?: number }, shortlistedStudents: Student[]) => {
     const companyName = roundData.companyName || 'Company';
     const roundName = roundData.name || 'Round';
     const roundId = `rnd-${Date.now()}`;
     const driveId = roundData.driveId || 'drv-1';
     const companyId = roundData.companyId || 'comp-1';
 
-    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, true);
+    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60);
 
-    const newRound: Round = {
+    const sprsNeededCount = roundData.sprsNeeded || 3;
+
+    // Build base round model
+    const mockRoundForAlloc: Round = {
       id: roundId,
       driveId,
       companyId,
@@ -263,7 +266,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       capacity: roundData.capacity || 50,
       qrToken: qrResult.token,
       qrExpiresAt: qrResult.expiresAtIso,
-      geoFenceEnabled: true,
+      geoFenceEnabled: false,
       status: 'SCHEDULED',
       assignedSprIds: [],
       totalShortlisted: shortlistedStudents.length,
@@ -271,7 +274,61 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       absentCount: 0,
     };
 
+    // Run SPR Allocation Engine for exact sprsNeededCount
+    const allocResult = allocateSPRsForRound(mockRoundForAlloc, sprsNeededCount, sprs, sprCycle, rounds);
+    const allocatedSprIds = allocResult.selectedSprs.map((s) => s.id);
+
+    const newRound: Round = {
+      ...mockRoundForAlloc,
+      assignedSprIds: allocatedSprIds,
+    };
+
     setRounds((prev) => [newRound, ...prev]);
+
+    // Save assigned SPR state & duty assignments
+    if (allocatedSprIds.length > 0) {
+      setSprs((prev) =>
+        prev.map((s) => {
+          const wasSelected = allocatedSprIds.includes(s.id);
+          const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
+          const updatedUsedInCycle = allocResult.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
+          return {
+            ...s,
+            totalDuties: updatedTotalDuties,
+            usedInCurrentCycle: updatedUsedInCycle,
+          };
+        })
+      );
+
+      const newDuties: SPRDutyAssignment[] = allocResult.selectedSprs.map((spr) => ({
+        id: `duty-${Date.now()}-${spr.id}`,
+        roundId,
+        sprId: spr.id,
+        sprName: spr.name,
+        companyName,
+        roundName,
+        date: newRound.date,
+        timeWindow: `${newRound.startTime} - ${newRound.endTime}`,
+        venue: newRound.venue,
+        role: 'SPR Duty',
+        status: 'ASSIGNED',
+        assignedAt: new Date().toISOString(),
+      }));
+
+      setDutyAssignments((prev) => [...newDuties, ...prev]);
+
+      setSprCycle((prev) => {
+        const newUsed = prev.usedSprCount + allocatedSprIds.length;
+        const isClosed = allocResult.cycleClosed;
+        return {
+          ...prev,
+          totalSprsInPool: sprs.length,
+          usedSprCount: isClosed ? 0 : newUsed,
+          id: isClosed ? prev.id + 1 : prev.id,
+          status: isClosed ? 'OPEN' : prev.status,
+        };
+      });
+    }
 
     // Create RoundStudent entries
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
@@ -288,7 +345,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }));
 
     setRoundStudents((prev) => [...newRoundStudents, ...prev]);
-    addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates.`);
+    addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates and ${allocatedSprIds.length} allocated SPRs.`);
   };
 
   const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN') => {
@@ -506,7 +563,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const round = rounds.find((r) => r.id === roundId);
     if (!round) return;
 
-    const qrResult = generateRoundQRToken(roundId, round.driveId, round.companyName, round.name, 30, round.geoFenceEnabled);
+    const qrResult = generateRoundQRToken(roundId, round.driveId, round.companyName, round.name, 60);
     setRounds((prev) =>
       prev.map((r) =>
         r.id === roundId

@@ -45,11 +45,11 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     // Convert unmatched recruiter rows into registered UPES student records with SAP IDs
     const createdStudents: Student[] = parseResult.unmatchedRows.map((u, i) => ({
       id: `st-new-${Date.now()}-${i}`,
-      sapId: u.applicantId.startsWith('5900') ? u.applicantId : `5900${Math.floor(1000 + Math.random() * 9000)}`,
+      sapId: u.applicantId,
       name: u.name,
       email: u.email,
-      phone: u.phone || '+91 98765 43210',
-      branch: 'B.Tech CSE - Data Science',
+      phone: u.phone || 'N/A',
+      branch: u.branch || 'N/A',
       batchYear: 2026,
       cgpa: 8.0,
       activeBacklogs: 0,

@@ -102,23 +102,16 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
           </div>
         </div>
 
-        {/* Security Controls */}
+        {/* Security Info */}
         <div className="space-y-3 text-xs">
-          <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <div className="flex items-center space-x-2 font-bold text-slate-700">
-              <MapPin className="w-4 h-4 text-amber-500" />
-              <span>Geo-Fencing Protection (Radius 500m)</span>
+          <div className="flex items-center justify-between bg-emerald-50 p-3 rounded-2xl border border-emerald-200">
+            <div className="flex items-center space-x-2 font-extrabold text-emerald-900">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+              <span>Single Security QR Code (Scan Anywhere)</span>
             </div>
-            <button
-              onClick={() => toggleGeoFence(round.id)}
-              className={`px-3 py-1 rounded-full font-bold transition-colors ${
-                round.geoFenceEnabled
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-slate-200 text-slate-600'
-              }`}
-            >
-              {round.geoFenceEnabled ? 'ENABLED' : 'DISABLED'}
-            </button>
+            <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
+              ACTIVE
+            </span>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

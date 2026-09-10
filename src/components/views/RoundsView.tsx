@@ -90,6 +90,7 @@ export const RoundsView: React.FC = () => {
         date,
         startTime: '09:00',
         endTime: '17:00',
+        sprsNeeded,
       },
       shortlistedStudentsTemp
     );

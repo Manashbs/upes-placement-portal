@@ -45,7 +45,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
   // Retrieve assigned SPRs for this round (or grab from sprs pool if list is empty)
   let assignedSprsList = sprs.filter((s) => round.assignedSprIds?.includes(s.id));
   if (assignedSprsList.length === 0) {
-    assignedSprsList = sprs.slice(0, Math.max(3, venues.length * 2));
+    assignedSprsList = sprs.slice(0, 3);
   }
 
   // Distribute SPRs across venues randomly / equally

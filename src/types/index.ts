@@ -93,6 +93,7 @@ export interface Round {
   geoFenceEnabled: boolean;
   status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED';
   assignedSprIds: string[];
+  sprsNeeded?: number;
   totalShortlisted: number;
   attendedCount: number;
   absentCount: number;
