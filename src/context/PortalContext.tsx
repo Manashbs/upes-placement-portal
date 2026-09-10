@@ -99,8 +99,14 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
 
   const [drives, setDrives] = useState<Drive[]>(initialDrives);
-  const [rounds, setRounds] = useState<Round[]>(initialRounds);
-  const [roundStudents, setRoundStudents] = useState<RoundStudent[]>(initialRoundStudents);
+  const [rounds, setRounds] = useState<Round[]>(() => {
+    const saved = localStorage.getItem('upes_rounds');
+    return saved ? JSON.parse(saved) : initialRounds;
+  });
+  const [roundStudents, setRoundStudents] = useState<RoundStudent[]>(() => {
+    const saved = localStorage.getItem('upes_round_students');
+    return saved ? JSON.parse(saved) : initialRoundStudents;
+  });
   const [sprs, setSprs] = useState<SPR[]>(() => {
     const saved = localStorage.getItem('upes_sprs');
     return saved ? JSON.parse(saved) : initialSPRs;
@@ -115,7 +121,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     '4 rounds currently need SPR duty allocation.',
   ]);
 
-  // Sync to local storage for persistence
+  // Sync to local storage for persistence & live sync across browser tabs
   useEffect(() => {
     localStorage.setItem('upes_students', JSON.stringify(students));
   }, [students]);
@@ -127,6 +133,48 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     localStorage.setItem('upes_sprs', JSON.stringify(sprs));
   }, [sprs]);
+
+  useEffect(() => {
+    localStorage.setItem('upes_rounds', JSON.stringify(rounds));
+  }, [rounds]);
+
+  useEffect(() => {
+    localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
+  }, [roundStudents]);
+
+  // Live real-time cross-tab and cross-window sync
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'upes_round_students' && e.newValue) {
+        try {
+          setRoundStudents(JSON.parse(e.newValue));
+        } catch {}
+      }
+      if (e.key === 'upes_rounds' && e.newValue) {
+        try {
+          setRounds(JSON.parse(e.newValue));
+        } catch {}
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      bc = new BroadcastChannel('upes_attendance_live_sync');
+      bc.onmessage = (evt) => {
+        if (evt.data?.type === 'ATTENDANCE_LIVE_UPDATE') {
+          if (evt.data.roundStudents) setRoundStudents(evt.data.roundStudents);
+          if (evt.data.rounds) setRounds(evt.data.rounds);
+        }
+      };
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      if (bc) bc.close();
+    };
+  }, []);
 
   const addAuditLog = (action: string, details: string) => {
     const newLog: AuditLog = {
@@ -446,6 +494,15 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             : r
         )
       );
+    }
+
+    // Dispatch broadcast event for instantaneous cross-tab live portal update
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        const bc = new BroadcastChannel('upes_attendance_live_sync');
+        bc.postMessage({ type: 'ATTENDANCE_LIVE_UPDATE' });
+        bc.close();
+      } catch {}
     }
 
     addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${sapId}) via ${method}.`);
