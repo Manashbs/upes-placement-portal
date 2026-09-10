@@ -367,14 +367,20 @@ export const RoundsView: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">Total Venues *</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
+                  <select
                     value={totalVenues}
                     onChange={(e) => handleTotalVenuesChange(Number(e.target.value))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                  />
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none cursor-pointer focus:ring-2 focus:ring-amber-500"
+                  >
+                    <option value={1}>1 Venue</option>
+                    <option value={2}>2 Venues</option>
+                    <option value={3}>3 Venues</option>
+                    <option value={4}>4 Venues</option>
+                    <option value={5}>5 Venues</option>
+                    <option value={6}>6 Venues</option>
+                    <option value={7}>7 Venues</option>
+                    <option value={8}>8 Venues</option>
+                  </select>
                 </div>
 
                 <div>
