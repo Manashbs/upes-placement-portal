@@ -173,7 +173,7 @@ export const SPRRotationView: React.FC = () => {
                               </span>
                             </div>
                             <div className="text-[11px] font-medium text-slate-600">
-                              {duty.roundName} · <span className="text-slate-500 font-bold">{duty.role}</span>
+                              {duty.roundName}
                             </div>
                             <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
                               <span>📍 {duty.venue}</span>
@@ -329,10 +329,7 @@ export const SPRRotationView: React.FC = () => {
                             </div>
                           </div>
 
-                          <div className="flex items-center justify-between text-[11px] bg-slate-50 p-2 rounded-xl border border-slate-100">
-                            <span className="text-slate-500">Assigned Duty Role:</span>
-                            <span className="font-extrabold text-slate-900">{duty.role}</span>
-                          </div>
+                          {/* Venue & Time info */}
                         </div>
                       ))}
                     </div>

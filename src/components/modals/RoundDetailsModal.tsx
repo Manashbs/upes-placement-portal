@@ -178,13 +178,6 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                   {/* Assigned SPRs List */}
                   <div className="space-y-2">
                     {vItem.sprs.map((spr, sIdx) => {
-                      const roles = [
-                        'Lead Attendance Monitor',
-                        'Panel & Token Coordinator',
-                        'Candidate Escort & Verification',
-                      ];
-                      const dutyRole = roles[sIdx % roles.length];
-
                       return (
                         <div
                           key={spr.id || sIdx}
@@ -205,10 +198,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                           </div>
 
                           <div className="text-right">
-                            <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200 block">
-                              {dutyRole}
-                            </span>
-                            <span className="text-[9px] font-semibold text-emerald-600 block mt-0.5">
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 inline-block">
                               ✓ Confirmed
                             </span>
                           </div>
