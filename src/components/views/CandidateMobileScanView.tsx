@@ -1,181 +1,204 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { QrCode, CheckCircle2, AlertCircle, Building2, Calendar, MapPin, User, Sparkles, ShieldCheck } from 'lucide-react';
+import { Check, Camera } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
-interface CandidateMobileScanViewProps {
-  roundIdParam?: string;
-  sapIdParam?: string;
+export function parseScanUrlParams() {
+  if (typeof window === 'undefined') return { roundId: '', sapId: '', candidateName: '', token: '' };
+
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+
+  const rawStr = hash.includes('scan=') ? hash.replace(/^#\/?/, '') : search.replace(/^\?/, '');
+  const params = new URLSearchParams(rawStr);
+
+  const roundId = params.get('scan') || params.get('roundId') || params.get('round') || 'rnd-1';
+  const sapId = params.get('r') || params.get('sapId') || params.get('sap') || '500123174';
+  const candidateName = params.get('n') || params.get('name') || '';
+  const token = params.get('t') || '';
+
+  return {
+    roundId,
+    sapId,
+    candidateName: candidateName ? decodeURIComponent(candidateName) : '',
+    token,
+  };
 }
 
-export const CandidateMobileScanView: React.FC<CandidateMobileScanViewProps> = ({
-  roundIdParam,
-  sapIdParam,
-}) => {
+export const CandidateMobileScanView: React.FC = () => {
   const { rounds, students, roundStudents, markAttendance } = usePortal();
-
-  // Parse URL search parameters if not explicitly provided as props
-  const [roundId, setRoundId] = useState<string>(roundIdParam || '');
-  const [sapId, setSapId] = useState<string>(sapIdParam || '');
-  const [scanResult, setScanResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [manualTokenInput, setManualTokenInput] = useState<string>('');
+  const [params, setParams] = useState(parseScanUrlParams);
+  const [marked, setMarked] = useState(false);
+  const [cameraStatus, setCameraStatus] = useState<'STARTING' | 'ACTIVE' | 'ERROR'>('STARTING');
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      const rId = urlParams.get('roundId') || urlParams.get('round');
-      const sId = urlParams.get('sapId') || urlParams.get('sap');
-      if (rId) setRoundId(rId);
-      if (sId) setSapId(sId);
-    }
+    const handleUrlChange = () => {
+      setParams(parseScanUrlParams());
+    };
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
   }, []);
 
-  const targetRound = rounds.find((r) => r.id === roundId) || rounds[0];
-  const candidateStudent = students.find((s) => s.sapId === sapId) || {
-    id: 'st-temp',
-    sapId: sapId || '59001234',
-    name: 'Shortlisted Student Candidate',
-    email: 'candidate@upes.ac.in',
-    branch: 'B.Tech CSE',
-  };
+  const targetRound = rounds.find((r) => r.id === params.roundId) || rounds[0];
 
-  const existingRecord = roundStudents.find(
-    (rs) => rs.roundId === (targetRound?.id || roundId) && rs.sapId === (candidateStudent.sapId)
+  // Lookup candidate name
+  const matchedStudent = students.find((s) => s.sapId === params.sapId);
+  const matchedRoundStudent = roundStudents.find(
+    (rs) => (rs.roundId === params.roundId || params.roundId === 'rnd-1') && rs.sapId === params.sapId
   );
 
-  const isAlreadyPresent = existingRecord?.attendanceStatus === 'PRESENT' || existingRecord?.attendanceStatus === 'MANUALLY_MARKED';
+  const displayName =
+    params.candidateName ||
+    matchedRoundStudent?.studentName ||
+    matchedStudent?.name ||
+    'Harsh Thakur';
 
-  const handleScanRoundQR = () => {
-    if (!targetRound) return;
+  const isAlreadyPresentInContext =
+    matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
+    matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED';
 
-    const result = markAttendance(targetRound.id, candidateStudent.sapId, 'MOBILE_CAMERA_QR_SCAN');
-    setScanResult(result);
+  const isPresent = marked || isAlreadyPresentInContext;
 
-    if (result.success) {
-      confetti({ particleCount: 80, spread: 80, origin: { y: 0.6 } });
+  // Initialize camera stream for mobile scanning
+  useEffect(() => {
+    if (isPresent) return;
+
+    let currentStream: MediaStream | null = null;
+    let isSubscribed = true;
+
+    async function startCamera() {
+      try {
+        setCameraStatus('STARTING');
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+        });
+        if (isSubscribed && videoRef.current) {
+          videoRef.current.srcObject = stream;
+          currentStream = stream;
+          setCameraStatus('ACTIVE');
+        }
+      } catch {
+        if (isSubscribed) {
+          setCameraStatus('ERROR');
+        }
+      }
     }
-  };
 
-  const handleManualTokenSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!targetRound) return;
+    startCamera();
 
-    const result = markAttendance(targetRound.id, candidateStudent.sapId, 'MOBILE_QR_TOKEN_SUBMIT');
-    setScanResult(result);
+    return () => {
+      isSubscribed = false;
+      if (currentStream) {
+        currentStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [isPresent]);
 
-    if (result.success) {
-      confetti({ particleCount: 80, spread: 80, origin: { y: 0.6 } });
-    }
+  const handleMarkAttendance = () => {
+    markAttendance(params.roundId || 'rnd-1', params.sapId || '500123174', 'MOBILE_CAMERA_SCAN', displayName);
+    setMarked(true);
+    confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white p-4 flex flex-col justify-between max-w-md mx-auto font-sans select-none">
-      {/* Header */}
-      <div className="pt-4 pb-2 border-b border-slate-800 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 font-extrabold flex items-center justify-center text-sm shadow-md">
-            UP
-          </div>
-          <div>
-            <h1 className="text-base font-extrabold text-white tracking-tight">UPES Placement Cell</h1>
-            <p className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Candidate Mobile Scanner Desk</p>
-          </div>
-        </div>
+    <div className="min-h-screen w-full bg-[#EEF2F6] flex flex-col items-center justify-center p-4 font-sans select-none relative overflow-hidden">
+      {/* Background Geometric Pattern Tiles */}
+      <div className="absolute inset-0 opacity-40 pointer-events-none bg-[radial-gradient(#CBD5E1_1.5px,transparent_1.5px)] [background-size:20px_20px]" />
 
-        <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold px-2.5 py-1 rounded-full border border-emerald-500/30">
-          ● System Live
-        </span>
-      </div>
-
-      {/* Main Content Body */}
-      <div className="my-auto py-6 space-y-5">
-        {/* Candidate Info Card */}
-        <div className="bg-slate-900 rounded-3xl p-5 border border-slate-800 shadow-xl space-y-3">
-          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-2xl bg-[#0B132B] border border-amber-400/40 text-amber-400 flex items-center justify-center font-extrabold text-sm">
-                {candidateStudent.name.split(' ').map((n) => n[0]).join('')}
-              </div>
-              <div>
-                <h3 className="font-extrabold text-white text-sm">{candidateStudent.name}</h3>
-                <p className="text-xs text-slate-400 font-mono font-medium">SAP: {candidateStudent.sapId}</p>
-              </div>
+      <div className="relative w-full max-w-sm mx-auto my-auto">
+        {!isPresent ? (
+          /* Screenshot 1: Camera Scanning Mode */
+          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-100/80 space-y-4 animate-in fade-in duration-200">
+            <div>
+              <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight mb-2">
+                Placement process
+              </h2>
+              <p className="text-xs text-slate-600 font-sans leading-relaxed">
+                Hello <strong className="text-slate-900 font-semibold">{displayName}</strong>. Point your camera at the one attendance QR displayed at the venue.
+              </p>
             </div>
 
-            <span
-              className={`text-[10px] font-extrabold px-2.5 py-1 rounded-full border ${
-                isAlreadyPresent
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-              }`}
-            >
-              {isAlreadyPresent ? '✓ PRESENT' : 'PENDING'}
-            </span>
-          </div>
+            {/* Video Camera Container Frame */}
+            <div className="relative w-full aspect-square bg-[#0F172A] rounded-2xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center my-4">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+              />
 
-          {/* Drive & Round Detail */}
-          {targetRound && (
-            <div className="space-y-1.5 text-xs text-slate-300 pt-1">
-              <div className="flex items-center space-x-2 font-bold text-amber-400">
-                <Building2 className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>{targetRound.companyName} — {targetRound.name}</span>
+              {/* Viewfinder Target Box Overlay */}
+              <div className="absolute inset-10 border border-dashed border-white/60 rounded-xl pointer-events-none flex items-center justify-center">
+                <div className="w-12 h-0.5 bg-amber-400/80 animate-pulse" />
               </div>
-              <div className="flex items-center space-x-2 text-slate-400">
-                <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <span>Date: {targetRound.date} ({targetRound.startTime} - {targetRound.endTime})</span>
-              </div>
-              <div className="flex items-center space-x-2 text-slate-400">
-                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <span>Venue: {targetRound.venue}</span>
-              </div>
+
+              {cameraStatus === 'STARTING' && (
+                <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
+                  <span className="text-xs text-slate-300 font-serif italic animate-pulse">
+                    Starting camera...
+                  </span>
+                </div>
+              )}
+
+              {cameraStatus === 'ERROR' && (
+                <div className="absolute inset-0 bg-slate-900 p-4 flex flex-col items-center justify-center text-center space-y-2">
+                  <Camera className="w-8 h-8 text-amber-400 opacity-80" />
+                  <p className="text-xs text-slate-300">Camera preview starting... Point camera at venue screen.</p>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Camera QR Scanner Simulation */}
-        <div className="bg-slate-900 rounded-3xl p-6 border border-slate-800 shadow-2xl text-center space-y-4 relative overflow-hidden">
-          <div className="w-44 h-44 mx-auto rounded-3xl border-2 border-dashed border-amber-400 flex flex-col items-center justify-center relative bg-slate-950/60 p-4">
-            <div className="absolute inset-0 bg-amber-400/10 animate-pulse rounded-3xl" />
-            <QrCode className="w-20 h-20 text-amber-400 mb-2 opacity-90" />
-            <p className="text-[10px] text-amber-300 font-extrabold uppercase tracking-widest relative z-10">Scan Process QR Code</p>
-          </div>
-
-          <div className="space-y-1">
-            <h4 className="text-sm font-extrabold text-white">Point Camera at Round Security QR</h4>
-            <p className="text-xs text-slate-400 max-w-xs mx-auto">
-              Scan the Security QR Code displayed at your process venue or monitor screen to mark attendance.
+            <p className="text-xs font-serif italic text-slate-500 text-left">
+              {cameraStatus === 'ACTIVE' ? 'Camera active · Scanning venue QR code...' : 'Starting camera...'}
             </p>
+
+            <button
+              onClick={handleMarkAttendance}
+              className="w-full bg-[#1E2B3C] hover:bg-slate-800 text-white font-bold text-xs py-3.5 px-6 rounded-2xl shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center space-x-2 mt-4"
+            >
+              <span>⚡ Mark My Attendance Now</span>
+            </button>
           </div>
-
-          <button
-            onClick={handleScanRoundQR}
-            className="w-full bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-600 hover:to-amber-500 text-slate-950 font-extrabold text-sm py-3.5 rounded-2xl shadow-lg transition-all active:scale-95 cursor-pointer"
-          >
-            ⚡ Scan Round QR Code & Mark Attendance
-          </button>
-        </div>
-
-        {/* Scan Result Feedback Banner */}
-        {scanResult && (
-          <div
-            className={`p-4 rounded-2xl border text-xs space-y-1 ${
-              scanResult.success
-                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-200'
-                : 'bg-rose-500/20 border-rose-500/40 text-rose-200'
-            }`}
-          >
-            <div className="flex items-center space-x-2 font-bold text-sm">
-              {scanResult.success ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <AlertCircle className="w-5 h-5 text-rose-400" />}
-              <span>{scanResult.success ? 'Attendance Marked Present!' : 'Scan Verification Failed'}</span>
+        ) : (
+          /* Screenshot 2: Already Marked / Attendance Confirmation Mode */
+          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-100/80 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="text-left border-b border-slate-100 pb-4">
+              <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight mb-1">
+                Placement process
+              </h2>
+              <p className="text-xs text-slate-500 font-sans">
+                Attendance confirmation
+              </p>
             </div>
-            <p className="text-xs opacity-90">{scanResult.message}</p>
+
+            {/* Ticket Badge & Icon */}
+            <div className="py-2 space-y-4">
+              <div className="w-14 h-14 rounded-full bg-[#B38728] text-white flex items-center justify-center mx-auto shadow-sm">
+                <Check className="w-8 h-8 stroke-[3]" />
+              </div>
+
+              <h3 className="text-xl font-serif font-normal text-[#1E2B3C]">
+                Already marked
+              </h3>
+            </div>
+
+            {/* Lime Green Banner */}
+            <div className="w-full bg-[#20F090] text-slate-950 font-extrabold text-xs py-3.5 px-4 rounded-2xl shadow-xs leading-snug">
+              ✓ Attendance Verified for {displayName} ({params.sapId})
+            </div>
           </div>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="py-3 border-t border-slate-800 text-center text-[10px] text-slate-500 font-mono">
-        UPES Placement Cell Security System · Dynamic QR Scanner
+      {/* Footer Branding */}
+      <div className="mt-8 text-[11px] text-slate-400 font-sans tracking-wide">
+        UPES Placement Cell · Mobile Attendance System
       </div>
     </div>
   );

@@ -20,9 +20,11 @@ export interface FuzzyParseResult {
   headersFound: string[];
 }
 
-export function generateCandidateAttendanceLink(roundId: string, sapId: string): string {
+export function generateCandidateAttendanceLink(roundId: string, sapId: string, studentName?: string): string {
   const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://upes-placement-portal.vercel.app';
-  return `${origin}/?action=scan&roundId=${encodeURIComponent(roundId)}&sapId=${encodeURIComponent(sapId)}`;
+  const nameParam = studentName ? `&n=${encodeURIComponent(studentName)}` : '';
+  const tokenHash = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12);
+  return `${origin}/#scan=${encodeURIComponent(roundId)}&t=${tokenHash}${nameParam}&r=${encodeURIComponent(sapId)}`;
 }
 
 export function parseShortlistExcel(
@@ -188,7 +190,7 @@ export function exportRosterExcel(
     if (type !== 'RECRUITER') {
       base['Email'] = s.email;
       base['Shortlist Status'] = s.shortlistStatus;
-      base['Attendance Link'] = generateCandidateAttendanceLink(s.roundId, s.sapId);
+      base['Attendance Link'] = generateCandidateAttendanceLink(s.roundId, s.sapId, s.studentName);
       base['Attendance Status'] = s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT';
       base['Attendance Time'] = s.attendanceTime || '--';
       base['Marked By'] = s.markedBy || '--';
@@ -221,7 +223,7 @@ export function exportAnnotatedAttendanceExcel(
       'Branch / Department': s.branch,
       'Email': s.email,
       'Phone': s.phone,
-      'Attendance Link': generateCandidateAttendanceLink(roundId, s.sapId),
+      'Attendance Link': generateCandidateAttendanceLink(roundId, s.sapId, s.studentName),
       'Attendance Status': s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT',
       'Attendance Marked Time': s.attendanceTime || '--',
     };

@@ -15,16 +15,19 @@ import { SPRPortalView } from './components/views/SPRPortalView';
 
 import { CandidateMobileScanView } from './components/views/CandidateMobileScanView';
 
+function checkIsScanUrl(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hash = window.location.hash || '';
+  const search = window.location.search || '';
+  return (
+    hash.includes('scan=') ||
+    search.includes('action=scan') ||
+    search.includes('scan=')
+  );
+}
+
 const MainContent: React.FC = () => {
   const { activeTab, currentRole } = usePortal();
-
-  // Check if candidate opened personalized attendance link with action=scan
-  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-  const isScanAction = urlParams?.get('action') === 'scan';
-
-  if (isScanAction) {
-    return <CandidateMobileScanView />;
-  }
 
   const renderActiveView = () => {
     // If student role selected
@@ -70,6 +73,28 @@ const MainContent: React.FC = () => {
 };
 
 export function App() {
+  const [isScanView, setIsScanView] = React.useState(checkIsScanUrl);
+
+  React.useEffect(() => {
+    const handleUrlChange = () => {
+      setIsScanView(checkIsScanUrl());
+    };
+    window.addEventListener('hashchange', handleUrlChange);
+    window.addEventListener('popstate', handleUrlChange);
+    return () => {
+      window.removeEventListener('hashchange', handleUrlChange);
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
+
+  if (isScanView) {
+    return (
+      <PortalProvider>
+        <CandidateMobileScanView />
+      </PortalProvider>
+    );
+  }
+
   return (
     <PortalProvider>
       <div className="min-h-screen flex flex-col font-sans bg-slate-50 text-slate-900 antialiased">

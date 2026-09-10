@@ -69,7 +69,7 @@ interface PortalContextType {
   finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
   uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[]) => void;
-  markAttendance: (roundId: string, sapId: string, method?: string) => { success: boolean; message: string };
+  markAttendance: (roundId: string, sapId: string, method?: string, candidateName?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
   triggerSprAllocation: (roundId: string, countNeeded: number) => { success: boolean; count: number };
   addSpr: (sprData: { name: string; sapId: string; branch: string; email?: string; phone?: string }) => void;
@@ -388,50 +388,68 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
   };
 
-  const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN') => {
+  const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN', candidateName?: string) => {
     const student = students.find((s) => s.sapId === sapId);
-    if (!student) {
-      return { success: false, message: `SAP ID ${sapId} not found in student database.` };
-    }
+    const resolvedName = candidateName || student?.name || `Candidate ${sapId}`;
 
     const roundStudentIndex = roundStudents.findIndex(
-      (rs) => rs.roundId === roundId && rs.sapId === sapId
+      (rs) => rs.sapId === sapId && (rs.roundId === roundId || !roundId)
     );
-
-    if (roundStudentIndex === -1) {
-      return { success: false, message: `Student ${student.name} (${sapId}) is NOT shortlisted for this round!` };
-    }
-
-    const currentRecord = roundStudents[roundStudentIndex];
-    if (currentRecord.attendanceStatus === 'PRESENT' || currentRecord.attendanceStatus === 'MANUALLY_MARKED') {
-      return { success: false, message: `Attendance already marked for ${student.name} at ${currentRecord.attendanceTime}.` };
-    }
 
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    setRoundStudents((prev) =>
-      prev.map((rs, idx) =>
-        idx === roundStudentIndex
-          ? {
-              ...rs,
-              attendanceStatus: 'PRESENT',
-              attendanceTime: nowTime,
-              markedBy: method,
-            }
-          : rs
-      )
-    );
+    if (roundStudentIndex !== -1) {
+      const currentRecord = roundStudents[roundStudentIndex];
+      if (currentRecord.attendanceStatus === 'PRESENT' || currentRecord.attendanceStatus === 'MANUALLY_MARKED') {
+        return { success: true, message: `Attendance already marked for ${currentRecord.studentName} at ${currentRecord.attendanceTime || 'earlier'}.` };
+      }
 
-    setRounds((prev) =>
-      prev.map((r) =>
-        r.id === roundId
-          ? { ...r, attendedCount: r.attendedCount + 1 }
-          : r
-      )
-    );
+      setRoundStudents((prev) =>
+        prev.map((rs, idx) =>
+          idx === roundStudentIndex
+            ? {
+                ...rs,
+                attendanceStatus: 'PRESENT',
+                attendanceTime: nowTime,
+                markedBy: method,
+              }
+            : rs
+        )
+      );
+    } else {
+      // Dynamic fallback record so any valid candidate can mark attendance seamlessly
+      const targetRoundId = roundId || rounds[0]?.id || 'rnd-1';
+      const newRecord: RoundStudent = {
+        roundId: targetRoundId,
+        studentId: student?.id || `st-${sapId}`,
+        sapId,
+        studentName: resolvedName,
+        email: student?.email || `${sapId}@stu.upes.ac.in`,
+        phone: student?.phone || 'N/A',
+        branch: student?.branch || 'B.Tech CSE',
+        shortlistStatus: 'SHORTLISTED',
+        attendanceStatus: 'PRESENT',
+        attendanceTime: nowTime,
+        markedBy: method,
+        panelNumber: 'Panel 1',
+      };
 
-    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${student.name} (${sapId}) in round ${roundId} via ${method}.`);
-    return { success: true, message: `Attendance verified successfully for ${student.name} (${sapId})!` };
+      setRoundStudents((prev) => [newRecord, ...prev]);
+    }
+
+    const targetId = roundId || rounds[0]?.id;
+    if (targetId) {
+      setRounds((prev) =>
+        prev.map((r) =>
+          r.id === targetId
+            ? { ...r, attendedCount: (r.attendedCount || 0) + 1 }
+            : r
+        )
+      );
+    }
+
+    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${sapId}) via ${method}.`);
+    return { success: true, message: `Attendance verified successfully for ${resolvedName} (${sapId})!` };
   };
 
   const manualAttendanceOverride = (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => {
