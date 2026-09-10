@@ -162,14 +162,12 @@ export const SPRRotationView: React.FC = () => {
                               <span className="font-extrabold text-slate-900">{duty.companyName}</span>
                               <span
                                 className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full ${
-                                  duty.status === 'ACCEPTED'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : duty.status === 'COMPLETED'
+                                  duty.status === 'COMPLETED'
                                     ? 'bg-slate-200 text-slate-700'
                                     : 'bg-amber-100 text-amber-800'
                                 }`}
                               >
-                                {duty.status}
+                                {duty.status === 'COMPLETED' ? 'COMPLETED' : 'ASSIGNED'}
                               </span>
                             </div>
                             <div className="text-[11px] font-medium text-slate-600">
@@ -306,14 +304,12 @@ export const SPRRotationView: React.FC = () => {
                             </div>
                             <span
                               className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
-                                duty.status === 'ACCEPTED'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : duty.status === 'COMPLETED'
+                                duty.status === 'COMPLETED'
                                   ? 'bg-slate-100 text-slate-600 border-slate-200'
                                   : 'bg-amber-50 text-amber-800 border-amber-200'
                               }`}
                             >
-                              {duty.status}
+                              {duty.status === 'COMPLETED' ? 'Completed' : 'Duty Assigned'}
                             </span>
                           </div>
 

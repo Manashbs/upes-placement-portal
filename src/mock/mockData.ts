@@ -499,7 +499,7 @@ export const initialDutyAssignments: SPRDutyAssignment[] = [
     timeWindow: '13:00 - 17:00',
     venue: 'Block B - Executive Placement Rooms 1-5',
     role: 'Panel & Token Coordinator',
-    status: 'ACCEPTED',
+    status: 'ASSIGNED',
     assignedAt: '2026-09-08T18:00:00Z',
   },
   {
@@ -513,7 +513,7 @@ export const initialDutyAssignments: SPRDutyAssignment[] = [
     timeWindow: '10:00 - 12:00',
     venue: 'Block C - Auditorium & High Performance Lab',
     role: 'Lab Attendance Verification',
-    status: 'ACCEPTED',
+    status: 'ASSIGNED',
     assignedAt: '2026-09-09T08:00:00Z',
   },
   {
@@ -541,7 +541,7 @@ export const initialDutyAssignments: SPRDutyAssignment[] = [
     timeWindow: '10:00 - 13:00',
     venue: 'Block D - Management Seminar Hall',
     role: 'Case Study Logistics Monitor',
-    status: 'ACCEPTED',
+    status: 'ASSIGNED',
     assignedAt: '2026-09-09T14:00:00Z',
   },
   {

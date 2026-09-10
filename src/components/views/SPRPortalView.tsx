@@ -59,13 +59,13 @@ export const SPRPortalView: React.FC = () => {
                   </div>
 
                   <span
-                    className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
-                      duty.status === 'ACCEPTED'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    className={`text-[10px] font-extrabold px-3 py-1 rounded-full border ${
+                      duty.status === 'COMPLETED'
+                        ? 'bg-slate-200 text-slate-700 border-slate-300'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
                     }`}
                   >
-                    {duty.status}
+                    {duty.status === 'COMPLETED' ? 'COMPLETED' : 'DUTY ASSIGNED'}
                   </span>
                 </div>
 
@@ -81,23 +81,14 @@ export const SPRPortalView: React.FC = () => {
                 </div>
 
                 <div className="flex items-center space-x-3 pt-2">
-                  {duty.status === 'PENDING' ? (
-                    <button
-                      onClick={() => acceptDuty(duty.id)}
-                      className="bg-[#0B132B] hover:bg-slate-800 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-xs"
-                    >
-                      Accept Duty
-                    </button>
-                  ) : (
-                    <span className="text-xs font-bold text-emerald-700 flex items-center space-x-1">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>Duty Accepted</span>
-                    </span>
-                  )}
+                  <span className="text-xs font-extrabold text-amber-900 bg-amber-50 px-3.5 py-2 rounded-xl border border-amber-200 flex items-center space-x-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-amber-600" />
+                    <span>Mandatory Duty (Assigned by System Cycle)</span>
+                  </span>
 
                   <button
                     onClick={() => alert('Swap request submitted to PO for approval.')}
-                    className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-xs px-4 py-2 rounded-xl"
+                    className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 font-bold text-xs px-4 py-2 rounded-xl cursor-pointer"
                   >
                     Request Swap
                   </button>

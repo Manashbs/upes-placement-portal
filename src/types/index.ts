@@ -146,7 +146,7 @@ export interface SPRDutyAssignment {
   timeWindow: string;
   venue: string;
   role: string;
-  status: 'PENDING' | 'ACCEPTED' | 'SWAP_REQUESTED' | 'COMPLETED';
+  status: 'ASSIGNED' | 'PENDING' | 'ACCEPTED' | 'SWAP_REQUESTED' | 'COMPLETED';
   assignedAt: string;
 }
 

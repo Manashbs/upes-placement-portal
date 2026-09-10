@@ -198,8 +198,8 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                           </div>
 
                           <div className="text-right">
-                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 inline-block">
-                              ✓ Confirmed
+                            <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 inline-block">
+                              Duty Assigned
                             </span>
                           </div>
                         </div>

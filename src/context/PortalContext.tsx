@@ -399,8 +399,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       date: round.date,
       timeWindow: `${round.startTime} - ${round.endTime}`,
       venue: round.venue,
-      role: 'Process Coordinator & Attendance Verifier',
-      status: 'PENDING',
+      role: 'SPR Duty',
+      status: 'ASSIGNED',
       assignedAt: new Date().toISOString(),
     }));
 
