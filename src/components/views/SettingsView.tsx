@@ -101,17 +101,25 @@ export const SettingsView: React.FC = () => {
 
   const handleCreateUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim() || !newUsername.trim()) return;
+    const cleanU = newUsername.trim();
+    if (!newName.trim() || !cleanU) return;
 
-    createUser({
+    const emailVal = (newEmail.trim() || cleanU);
+
+    const res = createUser({
       name: newName.trim(),
-      username: newUsername.trim(),
-      email: newEmail.trim() || newUsername.trim(),
+      username: cleanU,
+      email: emailVal,
       role: newRole,
       password: newPassword.trim() || 'Pass@123',
       status: 'ACTIVE',
       department: newDepartment.trim(),
     });
+
+    if (res && !res.success) {
+      alert(res.message);
+      return;
+    }
 
     setShowCreateModal(false);
     setNewName('');
@@ -397,61 +405,6 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Campus Rules & System Settings */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Tier Lock Policy */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
-          <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
-            <Lock className="w-5 h-5 text-amber-500" />
-            <h3 className="text-base font-extrabold text-slate-900">One Student One Offer / Tier Policy</h3>
-          </div>
-
-          <div className="space-y-3 text-xs">
-            <label className="flex items-center space-x-3 cursor-pointer">
-              <input type="checkbox" defaultChecked className="w-4 h-4 text-amber-500 rounded-md" />
-              <span className="font-bold text-slate-800">
-                Enforce Dream Offer Locking (&gt;15 LPA locks out Core companies)
-              </span>
-            </label>
-
-            <label className="flex items-center space-x-3 cursor-pointer">
-              <input type="checkbox" defaultChecked className="w-4 h-4 text-amber-500 rounded-md" />
-              <span className="font-bold text-slate-800">
-                Super Dream Tier (&gt;25 LPA) allows 1 upgraded attempt for placed candidates
-              </span>
-            </label>
-          </div>
-        </div>
-
-        {/* Attendance Security Settings */}
-        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
-          <div className="flex items-center space-x-3 border-b border-slate-100 pb-3">
-            <MapPin className="w-5 h-5 text-emerald-500" />
-            <h3 className="text-base font-extrabold text-slate-900">QR Attendance & Geo-Fencing</h3>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 text-xs">
-            <div>
-              <label className="font-bold text-slate-700 block mb-1">QR Token Validity</label>
-              <select defaultValue="60" className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold">
-                <option value="15">Every 15 minutes</option>
-                <option value="30">Every 30 minutes</option>
-                <option value="60">Every 60 minutes</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="font-bold text-slate-700 block mb-1">Geo-fence Radius</label>
-              <input
-                type="text"
-                defaultValue="500m (UPES Bidholi Campus)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Production Data Governance / Clear Portal */}
       <div className="bg-rose-50/50 rounded-3xl p-6 border border-rose-100 shadow-sm space-y-4">
         <div className="flex items-center space-x-3">
@@ -511,7 +464,7 @@ export const SettingsView: React.FC = () => {
                     value={newUsername}
                     onChange={(e) => {
                       setNewUsername(e.target.value);
-                      if (!newEmail) setNewEmail(e.target.value);
+                      setNewEmail(e.target.value);
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold focus:outline-none focus:border-amber-500"
                   />

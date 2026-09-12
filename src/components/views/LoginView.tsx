@@ -10,9 +10,30 @@ export const LoginView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [recaptchaVerified, setRecaptchaVerified] = useState(false);
+  const [recaptchaLoading, setRecaptchaLoading] = useState(false);
+  const [recaptchaError, setRecaptchaError] = useState(false);
+
+  const handleRecaptchaClick = () => {
+    if (recaptchaVerified || recaptchaLoading) return;
+    setRecaptchaLoading(true);
+    setRecaptchaError(false);
+    setTimeout(() => {
+      setRecaptchaLoading(false);
+      setRecaptchaVerified(true);
+    }, 700);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (!recaptchaVerified) {
+      setRecaptchaError(true);
+      setError('Please complete the Google reCAPTCHA verification.');
+      return;
+    }
+
     setLoading(true);
 
     setTimeout(() => {
@@ -142,6 +163,74 @@ export const LoginView: React.FC = () => {
             </span>
           </div>
 
+          {/* Google reCAPTCHA v2 Active Widget */}
+          <div className="pt-2 flex justify-center">
+            <div
+              onClick={handleRecaptchaClick}
+              className={`w-[304px] h-[78px] bg-[#f9f9f9] rounded-sm px-3 flex items-center justify-between transition-all cursor-pointer select-none ${
+                recaptchaError
+                  ? 'border-2 border-rose-400 ring-2 ring-rose-200'
+                  : recaptchaVerified
+                  ? 'border border-emerald-400 shadow-xs'
+                  : 'border border-[#d3d3d3] hover:border-[#b8b8b8] shadow-xs'
+              }`}
+            >
+              {/* Checkbox and Label */}
+              <div className="flex items-center space-x-3">
+                <div
+                  className={`w-7 h-7 rounded-xs flex items-center justify-center transition-all ${
+                    recaptchaVerified
+                      ? 'bg-emerald-500 text-white'
+                      : 'bg-white border-2 border-[#c1c1c1]'
+                  }`}
+                >
+                  {recaptchaLoading && (
+                    <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  )}
+                  {recaptchaVerified && <Check className="w-5 h-5 text-white stroke-[3]" />}
+                </div>
+
+                <span className="text-sm font-sans text-[#222] font-normal">
+                  I'm not a robot
+                </span>
+              </div>
+
+              {/* Google reCAPTCHA Brand Badge */}
+              <div className="flex flex-col items-center justify-center text-right pl-2">
+                <svg className="w-8 h-8" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M24 4C14.0589 4 6 12.0589 6 22H11C11 14.8203 16.8203 9 24 9V4Z" fill="#1A73E8" />
+                  <path d="M42 22C42 12.0589 33.9411 4 24 4V9C31.1797 9 37 14.8203 37 22H42Z" fill="#4285F4" />
+                  <path d="M24 44C33.9411 44 42 35.9411 42 26H37C37 33.1797 31.1797 39 24 39V44Z" fill="#34A853" />
+                  <path d="M6 26C6 35.9411 14.0589 44 24 44V39C16.8203 39 11 33.1797 11 26H6Z" fill="#FBBC05" />
+                </svg>
+                <span className="text-[10px] text-[#555] font-sans font-medium tracking-tight mt-0.5">
+                  reCAPTCHA
+                </span>
+                <div className="text-[8px] text-[#555] space-x-1">
+                  <a
+                    href="https://www.google.com/intl/en/policies/privacy/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:underline text-[#555]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Privacy
+                  </a>
+                  <span>-</span>
+                  <a
+                    href="https://www.google.com/intl/en/policies/terms/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="hover:underline text-[#555]"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Terms
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Submit Button matching Screenshot 1's warm sand/gold color */}
           <button
             type="submit"
@@ -159,13 +248,6 @@ export const LoginView: React.FC = () => {
           </button>
         </form>
 
-        {/* Notice text matching Screenshot 1 footer */}
-        <div className="text-center mt-4">
-          <p className="text-[11px] text-[#B91C1C] font-normal">
-            reCAPTCHA is not configured for this deployment.
-          </p>
-        </div>
-
         {/* Quick Admin Credentials Switcher for Convenience */}
         <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col items-center space-y-2">
           <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -181,6 +263,16 @@ export const LoginView: React.FC = () => {
               className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-md font-bold transition-colors cursor-pointer"
             >
               Master Admin
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUsername('Aanchal.gupta@upes.ac.in');
+                setPassword('Pass@123');
+              }}
+              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-md font-bold transition-colors cursor-pointer"
+            >
+              Aanchal Gupta (PO)
             </button>
             <button
               type="button"

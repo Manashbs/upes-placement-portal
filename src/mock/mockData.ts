@@ -43,6 +43,17 @@ export const initialUsers: PortalUser[] = [
     createdAt: '2026-09-01',
   },
   {
+    id: 'usr-po-aanchal',
+    username: 'Aanchal.gupta@upes.ac.in',
+    name: 'Aanchal Gupta',
+    email: 'Aanchal.gupta@upes.ac.in',
+    role: 'PLACEMENT_OFFICER',
+    password: 'Pass@123',
+    status: 'ACTIVE',
+    department: 'Corporate Relations & Placement Cell',
+    createdAt: '2026-09-01',
+  },
+  {
     id: 'usr-spr-1',
     username: 'spr',
     name: 'SPR Representative',

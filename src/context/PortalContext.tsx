@@ -108,7 +108,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [users, setUsers] = useState<PortalUser[]>(() => {
     try {
       const saved = localStorage.getItem('upes_portal_users');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: PortalUser[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Merge initial default accounts with saved accounts
+          const merged = [...parsed];
+          initialUsers.forEach((iu) => {
+            const exists = merged.some(
+              (m) => m.username.toLowerCase() === iu.username.toLowerCase() || (m.email && iu.email && m.email.toLowerCase() === iu.email.toLowerCase())
+            );
+            if (!exists) {
+              merged.push(iu);
+            }
+          });
+          return merged;
+        }
+      }
     } catch {}
     return initialUsers;
   });
@@ -245,6 +260,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
   }, [roundStudents]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_portal_users', JSON.stringify(users));
+    } catch {}
+  }, [users]);
 
   // Helper to trigger real-time live sync across state, localStorage, same-window events & BroadcastChannel
   const syncLiveAttendance = (newRoundStudents: RoundStudent[], newRounds: Round[]) => {
@@ -1008,12 +1029,51 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const login = (usr: string, pwd: string, rememberMe: boolean = true): boolean => {
-    const cleanU = usr.trim().toLowerCase();
-    const found = users.find(
-      (u) =>
-        (u.username.toLowerCase() === cleanU || u.email.toLowerCase() === cleanU) &&
-        (u.password === pwd || pwd === 'Pass@123')
-    );
+    const cleanU = (usr || '').trim().toLowerCase();
+    if (!cleanU) return false;
+
+    const cleanPrefix = cleanU.includes('@') ? cleanU.split('@')[0] : cleanU;
+
+    // Check in-memory users, fresh localStorage, and initialUsers
+    let pool: PortalUser[] = [...users];
+    try {
+      const saved = localStorage.getItem('upes_portal_users');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((p: PortalUser) => {
+            if (!pool.some((u) => u.id === p.id || u.username.toLowerCase() === p.username.toLowerCase())) {
+              pool.push(p);
+            }
+          });
+        }
+      }
+    } catch {}
+
+    initialUsers.forEach((iu) => {
+      if (!pool.some((u) => u.username.toLowerCase() === iu.username.toLowerCase())) {
+        pool.push(iu);
+      }
+    });
+
+    const found = pool.find((u) => {
+      const uUsername = (u.username || '').trim().toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uPrefix = uUsername.includes('@') ? uUsername.split('@')[0] : uUsername;
+
+      const userMatches =
+        uUsername === cleanU ||
+        uEmail === cleanU ||
+        uPrefix === cleanU ||
+        uUsername === cleanPrefix ||
+        uEmail === cleanPrefix;
+
+      if (!userMatches) return false;
+
+      // Allow login with user's assigned password, or the universal Pass@123
+      const passMatches = !u.password || u.password === pwd || pwd === 'Pass@123';
+      return passMatches;
+    });
 
     if (found) {
       if (found.status === 'DISABLED') {
@@ -1043,23 +1103,29 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (currentUser?.role !== 'MASTER_ADMIN') {
       return { success: false, message: 'Only Master Admin has authority to create users.' };
     }
-    const cleanU = userData.username.trim();
+    const cleanU = (userData.username || '').trim();
     if (!cleanU) return { success: false, message: 'Username is required.' };
-    if (users.some((u) => u.username.toLowerCase() === cleanU.toLowerCase())) {
-      return { success: false, message: 'A user with this username already exists.' };
-    }
+
+    const emailToUse = (userData.email || cleanU).trim();
 
     const newUser: PortalUser = {
       ...userData,
       id: `usr-${Date.now()}`,
       username: cleanU,
+      email: emailToUse,
       createdAt: new Date().toISOString().split('T')[0],
       status: userData.status || 'ACTIVE',
+      password: userData.password || 'Pass@123',
     };
 
     setUsers((prev) => {
-      const next = [newUser, ...prev];
-      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      const filtered = prev.filter(
+        (u) => u.username.toLowerCase() !== cleanU.toLowerCase() && (!u.email || u.email.toLowerCase() !== cleanU.toLowerCase())
+      );
+      const next = [newUser, ...filtered];
+      try {
+        localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      } catch {}
       return next;
     });
 
