@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { RoundStudent, Student } from '../types';
+import { getSheetBufferSync, getSheetMetaSync, saveSheetToStorage } from './sheetStorage';
 
 export interface MatchedCandidate {
   student: Student;
@@ -49,14 +50,15 @@ const ROLL_OR_REG_KEYWORDS = [
 ];
 
 const CANDIDATE_ID_KEYWORDS = [
+  'reference_id', 'reference id', 'reference no', 'ref id', 'ref_id', 'ref no', 'ref. no',
   'applicant id', 'applicant_id', 'candidate id', 'candidate_id', 'application no', 'application id',
-  'app id', 'app_id', 'ref no', 'reference no'
+  'app id', 'app_id'
 ];
 
 const NAME_KEYWORDS = ['name of the student', 'name of student', 'candidate name', 'student name', 'full name', 'name', 'person', 'participant'];
-const EMAIL_KEYWORDS = ['email', 'mail', 'e-mail', 'gmail', 'outlook'];
+const EMAIL_KEYWORDS = ['email id', 'email_id', 'email', 'mail', 'e-mail', 'gmail', 'outlook'];
 const PHONE_KEYWORDS = ['phone', 'mobile', 'contact', 'cell', 'number', 'whatsapp', 'tel'];
-const BRANCH_KEYWORDS = ['job profile', 'profile', 'role', 'designation', 'position', 'branch', 'department', 'dept', 'stream', 'course', 'discipline', 'program', 'specialization', 'degree', 'major'];
+const BRANCH_KEYWORDS = ['qualification', 'degree', 'job profile', 'profile', 'role', 'designation', 'position', 'branch', 'department', 'dept', 'stream', 'course', 'discipline', 'program', 'specialization', 'major'];
 
 /**
  * Find the header row index and column mappings from a raw rows array.
@@ -68,7 +70,9 @@ function detectHeaderRow(rawRows: any[][]) {
   for (let i = 0; i < Math.min(10, rawRows.length); i++) {
     const rowStr = rawRows[i].map((c) => String(c).toLowerCase()).join(' ');
     const hasName = NAME_KEYWORDS.some((k) => rowStr.includes(k));
-    const hasId = SAP_EXACT_KEYWORDS.some((k) => rowStr.includes(k)) || ROLL_OR_REG_KEYWORDS.some((k) => rowStr.includes(k));
+    const hasId = SAP_EXACT_KEYWORDS.some((k) => rowStr.includes(k)) ||
+                  ROLL_OR_REG_KEYWORDS.some((k) => rowStr.includes(k)) ||
+                  CANDIDATE_ID_KEYWORDS.some((k) => rowStr.includes(k));
     const hasEmail = EMAIL_KEYWORDS.some((k) => rowStr.includes(k));
     const hasBranch = BRANCH_KEYWORDS.some((k) => rowStr.includes(k));
 
@@ -102,7 +106,7 @@ function detectHeaderRow(rawRows: any[][]) {
     });
     if (rollIdx !== -1) return rollIdx;
 
-    // 3. Search for Candidate / Applicant ID (excluding serial columns)
+    // 3. Search for Candidate / Reference / Applicant ID (excluding serial columns)
     const candIdx = headerRow.findIndex((h) => {
       if (isSerialCol(h)) return false;
       const lower = h.toLowerCase().trim();
@@ -141,7 +145,7 @@ function detectHeaderRow(rawRows: any[][]) {
   const findNameColIndex = (): number => {
     return headerRow.findIndex((h) => {
       const lower = h.toLowerCase().trim();
-      if (lower.includes('company') || lower.includes('college') || lower.includes('university')) return false;
+      if (lower.includes('company') || lower.includes('college') || lower.includes('university') || lower.includes('institute')) return false;
       return NAME_KEYWORDS.some((k) => lower === k || lower.includes(k));
     });
   };
@@ -191,19 +195,6 @@ export function parseShortlistExcel(
   const matchedStudents: MatchedCandidate[] = [];
   const unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[] = [];
 
-  // Build Master DB Lookup Maps for enriching existing data
-  const masterMapByEmail = new Map<string, Student>();
-  const masterMapByName = new Map<string, Student>();
-  const masterMapByPhone = new Map<string, Student>();
-  const masterMapBySap = new Map<string, Student>();
-
-  masterStudents.forEach((s) => {
-    if (s.email) masterMapByEmail.set(s.email.toLowerCase().trim(), s);
-    if (s.name) masterMapByName.set(s.name.toLowerCase().trim(), s);
-    if (s.phone) masterMapByPhone.set(s.phone.replace(/\D/g, ''), s);
-    if (s.sapId) masterMapBySap.set(s.sapId.trim(), s);
-  });
-
   // 2. Extract Data Rows starting after headerRowIndex
   const dataRows = rawRows.slice(headerRowIndex + 1);
 
@@ -213,13 +204,14 @@ export function parseShortlistExcel(
     // 1. Extract rawId directly from the detected column
     let rawId = idCol >= 0 && rowArray[idCol] !== undefined && rowArray[idCol] !== null ? String(rowArray[idCol]).trim() : '';
 
-    // Safeguard: If another cell in the row contains a 7-11 digit SAP number (e.g. 500123178), prioritize it!
-    for (let c = 0; c < rowArray.length; c++) {
-      if (c === idCol) continue;
-      const cellVal = String(rowArray[c] || '').trim();
-      if (/^\d{7,11}$/.test(cellVal) || /^500\d{6,8}$/.test(cellVal)) {
-        rawId = cellVal;
-        break;
+    // If idCol didn't find anything, search other cells for a 7-11 digit SAP number
+    if (!rawId) {
+      for (let c = 0; c < rowArray.length; c++) {
+        const cellVal = String(rowArray[c] || '').trim();
+        if (/^\d{7,11}$/.test(cellVal) || /^500\d{6,8}$/.test(cellVal)) {
+          rawId = cellVal;
+          break;
+        }
       }
     }
 
@@ -240,7 +232,6 @@ export function parseShortlistExcel(
     // 2. Extract Candidate Name
     let rawName = nameCol >= 0 && rowArray[nameCol] !== undefined ? String(rowArray[nameCol]).trim() : '';
     if (!rawName) {
-      // Find first text cell that is not numeric or email
       for (let c = 0; c < rowArray.length; c++) {
         if (c === idCol) continue;
         const val = String(rowArray[c] || '').trim();
@@ -258,36 +249,26 @@ export function parseShortlistExcel(
 
     if (!rawName && !rawEmail && !rawId) return; // Skip invalid blank rows
 
-    // CRITICAL: NEVER overwrite rawId from the uploaded sheet with a mock student's SAP ID!
-    // The sheet data is the source of truth for the drive.
-    let existingStudent: Student | undefined;
-    if (masterMapBySap.has(rawId)) {
-      existingStudent = masterMapBySap.get(rawId);
-    } else if (rawEmail && masterMapByEmail.has(rawEmail.toLowerCase())) {
-      existingStudent = masterMapByEmail.get(rawEmail.toLowerCase());
-    } else if (rawName && masterMapByName.has(rawName.toLowerCase())) {
-      existingStudent = masterMapByName.get(rawName.toLowerCase());
-    }
-
+    // CRITICAL: ALWAYS preserve the exact SAP ID / Roll number from the sheet!
     const candidateStudent: Student = {
-      id: existingStudent?.id || `st-sheet-${rawId}-${Date.now()}-${idx}`,
-      sapId: rawId, // ALWAYS use the exact SAP ID / ID from the sheet!
-      name: rawName || existingStudent?.name || `Candidate ${rawId}`,
-      email: rawEmail || existingStudent?.email || `${rawId.toLowerCase()}@stu.upes.ac.in`,
-      phone: rawPhone || existingStudent?.phone || 'N/A',
-      branch: rawBranch !== 'N/A' ? rawBranch : (existingStudent?.branch || 'N/A'),
-      batchYear: existingStudent?.batchYear || 2026,
-      cgpa: existingStudent?.cgpa || 8.0,
-      activeBacklogs: existingStudent?.activeBacklogs || 0,
-      historicalBacklogs: existingStudent?.historicalBacklogs || 0,
-      tenthPercent: existingStudent?.tenthPercent || 85.0,
-      twelfthPercent: existingStudent?.twelfthPercent || 85.0,
+      id: `st-sheet-${rawId}-${Date.now()}-${idx}`,
+      sapId: rawId, // Exact SAP ID / Roll number from the sheet
+      name: rawName,
+      email: rawEmail || `${rawId.toLowerCase()}@stu.upes.ac.in`,
+      phone: rawPhone || 'N/A',
+      branch: rawBranch,
+      batchYear: 2026,
+      cgpa: 8.0,
+      activeBacklogs: 0,
+      historicalBacklogs: 0,
+      tenthPercent: 85.0,
+      twelfthPercent: 85.0,
       status: 'ELIGIBLE',
     };
 
     matchedStudents.push({
       student: candidateStudent,
-      matchType: existingStudent ? 'SAP_MATCH' : 'AUTO_REGISTERED',
+      matchType: 'AUTO_REGISTERED',
       recruiterData: {
         applicantId: rawId,
         candidateId: rawId,
@@ -314,10 +295,16 @@ export function exportRosterExcel(
   roundName: string,
   roundStudents: RoundStudent[],
   type: 'STANDARD' | 'PANEL' | 'NO_SHOW' | 'RECRUITER' = 'STANDARD',
-  format: 'xlsx' | 'csv' = 'xlsx'
+  format: 'xlsx' | 'csv' = 'xlsx',
+  roundId?: string
 ) {
-  let filtered = [...roundStudents];
+  // Delegate to exportExactSheetWithAttendance to maintain exact sheet preservation
+  if (roundId) {
+    exportExactSheetWithAttendance(roundId, companyName, roundName, roundStudents, [], format);
+    return;
+  }
 
+  let filtered = [...roundStudents];
   if (type === 'NO_SHOW') {
     filtered = filtered.filter((s) => s.attendanceStatus === 'ABSENT' || s.attendanceStatus === 'PENDING');
   }
@@ -325,60 +312,22 @@ export function exportRosterExcel(
   const exportData = filtered.map((s, index) => {
     const base: any = {
       'S.No': index + 1,
-      'SAP / Candidate ID': s.sapId,
-      'Student Name': s.studentName,
+      'SAP ID': s.sapId,
+      'Candidate Name': s.studentName,
       'Branch': s.branch,
-      'Phone': s.phone,
+      'Email': s.email,
+      'Attendance Status': s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT',
+      'Attendance Marked Time': s.attendanceTime || '--',
     };
-
-    if (type !== 'RECRUITER') {
-      base['Email'] = s.email;
-      base['Shortlist Status'] = s.shortlistStatus;
-      base['Attendance Link'] = generateCandidateAttendanceLink(s.roundId, s.sapId, s.studentName);
-      base['Attendance Status'] = s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT';
-      base['Attendance Time'] = s.attendanceTime || '--';
-      base['Marked By'] = s.markedBy || '--';
-    }
-
     return base;
   });
 
   const worksheet = XLSX.utils.json_to_sheet(exportData);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, `${roundName.slice(0, 20)} Roster`);
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Roster`);
 
   const ext = format === 'csv' ? 'csv' : 'xlsx';
-  const fileName = `UPES_${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Roster.${ext}`;
-  XLSX.writeFile(workbook, fileName, { bookType: ext as any });
-}
-
-export function exportAnnotatedAttendanceExcel(
-  companyName: string,
-  roundName: string,
-  roundId: string,
-  roundStudents: RoundStudent[],
-  format: 'xlsx' | 'csv' = 'xlsx'
-) {
-  const exportData = roundStudents.map((s, index) => {
-    return {
-      'S.No': index + 1,
-      'SAP / Reg ID': s.sapId,
-      'Student Name': s.studentName,
-      'Branch / Department': s.branch,
-      'Email': s.email,
-      'Phone': s.phone,
-      'Attendance Link': generateCandidateAttendanceLink(roundId, s.sapId, s.studentName),
-      'Attendance Status': s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT',
-      'Attendance Marked Time': s.attendanceTime || '--',
-    };
-  });
-
-  const worksheet = XLSX.utils.json_to_sheet(exportData);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, `Attendance Report`);
-
-  const ext = format === 'csv' ? 'csv' : 'xlsx';
-  const fileName = `UPES_${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Attendance_Report.${ext}`;
+  const fileName = `${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Roster.${ext}`;
   XLSX.writeFile(workbook, fileName, { bookType: ext as any });
 }
 
@@ -386,8 +335,6 @@ export function exportAnnotatedAttendanceExcel(
  * Preserves the original company-provided Excel sheet exactly as-is and appends
  * an "Attendance Link" column at the very end. Each candidate row gets a unique
  * personalized mobile scan URL.
- *
- * This is the key function that solves the "give me back MY sheet with links" requirement.
  */
 export function exportOriginalSheetWithAttendanceLinks(
   originalFileData: ArrayBuffer,
@@ -406,93 +353,39 @@ export function exportOriginalSheetWithAttendanceLinks(
 
   if (!rawRows || rawRows.length === 0) return;
 
-  const { headerRowIndex, idCol, nameCol, emailCol } = detectHeaderRow(rawRows);
+  const { headerRowIndex, idCol, nameCol } = detectHeaderRow(rawRows);
 
-  // Find the last column index in the original sheet
   const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
   const newColIndex = range.e.c + 1;
 
-  // Write the "Attendance Link" header in the header row
   const headerCellRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: newColIndex });
   worksheet[headerCellRef] = { t: 's', v: 'Attendance Link' };
 
-  // Build lookup maps for matching rows to students
-  const sapByEmail = new Map<string, string>();
-  const sapByName = new Map<string, string>();
-  const nameByEmail = new Map<string, string>();
-  const nameByName = new Map<string, string>();
-
-  matchedStudents.forEach((m) => {
-    const sapId = m.student.sapId;
-    const name = m.student.name;
-    if (m.recruiterData.rawEmail) {
-      sapByEmail.set(m.recruiterData.rawEmail.toLowerCase().trim(), sapId);
-      nameByEmail.set(m.recruiterData.rawEmail.toLowerCase().trim(), name);
-    }
-    if (m.recruiterData.rawName) {
-      sapByName.set(m.recruiterData.rawName.toLowerCase().trim(), sapId);
-      nameByName.set(m.recruiterData.rawName.toLowerCase().trim(), name);
-    }
-  });
-
-  // Also build lookup for unmatched rows (they get auto-generated IDs)
-  const unmatchedByName = new Map<string, { applicantId: string; name: string }>();
-  unmatchedRows.forEach((u) => {
-    if (u.name) unmatchedByName.set(u.name.toLowerCase().trim(), { applicantId: u.applicantId, name: u.name });
-  });
-
-  // Iterate through each data row and write the attendance link
   const dataRows = rawRows.slice(headerRowIndex + 1);
   dataRows.forEach((rowArray, idx) => {
     if (!rowArray || rowArray.every((cell) => String(cell).trim() === '')) return;
 
     const rowIndex = headerRowIndex + 1 + idx;
-    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
-    const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : String(rowArray[0] || rowArray[1] || '').trim();
-    const rawEmail = emailCol >= 0 && rowArray[emailCol] ? String(rowArray[emailCol]).trim() : '';
+    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : String(idx + 1);
+    const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : `Candidate ${rawId}`;
 
-    // Resolve SAP ID for this row
-    let sapId = '';
-    let studentName = rawName;
-
-    if (rawEmail && sapByEmail.has(rawEmail.toLowerCase())) {
-      sapId = sapByEmail.get(rawEmail.toLowerCase()) || '';
-      studentName = nameByEmail.get(rawEmail.toLowerCase()) || rawName;
-    } else if (rawName && sapByName.has(rawName.toLowerCase())) {
-      sapId = sapByName.get(rawName.toLowerCase()) || '';
-      studentName = nameByName.get(rawName.toLowerCase()) || rawName;
-    } else if (rawId) {
-      // Check if rawId is a known SAP ID
-      const matchedByRawId = masterStudents.find((s) => s.sapId.trim() === rawId);
-      sapId = matchedByRawId ? matchedByRawId.sapId : rawId;
-      studentName = matchedByRawId ? matchedByRawId.name : rawName;
-    } else if (rawName && unmatchedByName.has(rawName.toLowerCase())) {
-      const um = unmatchedByName.get(rawName.toLowerCase())!;
-      sapId = um.applicantId;
-      studentName = um.name;
-    } else {
-      sapId = rawId || `REG-2026-${String(idx + 1).padStart(3, '0')}`;
-    }
-
-    const link = generateCandidateAttendanceLink(roundId, sapId, studentName, sessionId);
+    const link = generateCandidateAttendanceLink(roundId, rawId, rawName, sessionId);
     const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: newColIndex });
     worksheet[cellRef] = { t: 's', v: link };
   });
 
-  // Update the sheet range to include the new column
   range.e.c = newColIndex;
   worksheet['!ref'] = XLSX.utils.encode_range(range);
 
-  // Download the modified workbook
   const fileName = `${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_With_Attendance_Links.xlsx`;
   XLSX.writeFile(workbook, fileName, { bookType: 'xlsx' });
 }
 
 /**
- * Preserves the original company-provided Excel sheet exactly as-is and appends
+ * Preserves the original company-provided Excel sheet EXACTLY as-is and appends
  * "Attendance Status" and "Attendance Marked Time" columns at the very end.
  *
- * It returns the exact sheet uploaded by the recruiter, supporting both .xlsx and .csv!
+ * This function is the single source of truth for all attendance sheet downloads.
  */
 export function exportExactSheetWithAttendance(
   roundId: string,
@@ -504,21 +397,101 @@ export function exportExactSheetWithAttendance(
   originalBuffer?: ArrayBuffer,
   originalMeta?: { headers: string[]; rows: any[][] }
 ): void {
-  // Build attendance lookup:
-  // sapId -> { status, time }
-  // name -> { status, time }
+  // Try retrieving original buffer & meta from sheetStorage if not passed directly
+  if (!originalBuffer) {
+    originalBuffer = getSheetBufferSync(roundId);
+  }
+  if (!originalMeta) {
+    originalMeta = getSheetMetaSync(roundId);
+  }
+
+  // Build comprehensive attendance lookups:
+  // SAP ID / Candidate ID -> { status, time }
+  // Student Name -> { status, time }
   const attendanceMapBySap = new Map<string, { status: string; time: string }>();
   const attendanceMapByName = new Map<string, { status: string; time: string }>();
 
-  roundStudents
-    .filter((rs) => rs.roundId === roundId)
-    .forEach((rs) => {
-      const isPresent = rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED';
-      const status = isPresent ? 'PRESENT' : 'ABSENT';
-      const time = isPresent ? (rs.attendanceTime || 'Recorded') : '--';
-      if (rs.sapId) attendanceMapBySap.set(String(rs.sapId).trim(), { status, time });
-      if (rs.studentName) attendanceMapByName.set(String(rs.studentName).toLowerCase().trim(), { status, time });
-    });
+  // Filter students for this round, or use all if round filter is empty
+  const roundFiltered = roundStudents.filter((rs) => rs.roundId === roundId);
+  const studentsToScan = roundFiltered.length > 0 ? roundFiltered : roundStudents;
+
+  studentsToScan.forEach((rs) => {
+    const isPresent = rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED';
+    const status = isPresent ? 'PRESENT' : 'ABSENT';
+    const time = isPresent ? (rs.attendanceTime || 'Recorded') : '--';
+    const cleanSap = String(rs.sapId || '').trim();
+    const cleanName = String(rs.studentName || '').trim().toLowerCase();
+
+    if (cleanSap) {
+      attendanceMapBySap.set(cleanSap, { status, time });
+      attendanceMapBySap.set(cleanSap.toLowerCase(), { status, time });
+    }
+    if (cleanName) {
+      attendanceMapByName.set(cleanName, { status, time });
+    }
+  });
+
+  // Also read any live scans from localStorage
+  try {
+    const liveScansRaw = localStorage.getItem('upes_live_scans');
+    if (liveScansRaw) {
+      const scans = JSON.parse(liveScansRaw);
+      if (Array.isArray(scans)) {
+        scans.forEach((ev: any) => {
+          if (ev.roundId === roundId || !ev.roundId) {
+            const sSap = String(ev.sapId || '').trim();
+            const sName = String(ev.studentName || '').trim().toLowerCase();
+            const sTime = ev.time || 'Recorded';
+            if (sSap) {
+              attendanceMapBySap.set(sSap, { status: 'PRESENT', time: sTime });
+              attendanceMapBySap.set(sSap.toLowerCase(), { status: 'PRESENT', time: sTime });
+            }
+            if (sName) {
+              attendanceMapByName.set(sName, { status: 'PRESENT', time: sTime });
+            }
+          }
+        });
+      }
+    }
+  } catch {}
+
+  // Helper to match row data to attendance status & time
+  const resolveRowAttendance = (rowArray: any[], idCol: number, nameCol: number): { status: string; time: string } => {
+    const rawId = idCol >= 0 && rowArray[idCol] !== undefined ? String(rowArray[idCol]).trim() : '';
+    const rawName = nameCol >= 0 && rowArray[nameCol] !== undefined ? String(rowArray[nameCol]).trim().toLowerCase() : '';
+
+    // 1. Direct match by SAP / candidate ID
+    if (rawId && attendanceMapBySap.has(rawId)) {
+      return attendanceMapBySap.get(rawId)!;
+    }
+    if (rawId && attendanceMapBySap.has(rawId.toLowerCase())) {
+      return attendanceMapBySap.get(rawId.toLowerCase())!;
+    }
+
+    // 2. Direct match by Name
+    if (rawName && attendanceMapByName.has(rawName)) {
+      return attendanceMapByName.get(rawName)!;
+    }
+
+    // 3. Partial / contains Name match (e.g. 'ANIRUDDH VIJAYVARGIA' contains 'aniruddh')
+    if (rawName && rawName.length > 2) {
+      for (const [keyName, val] of attendanceMapByName.entries()) {
+        if (keyName.length > 2 && (rawName.includes(keyName) || keyName.includes(rawName))) {
+          return val;
+        }
+      }
+    }
+
+    // 4. Any cell in row contains an ID from attendanceMapBySap
+    for (let c = 0; c < rowArray.length; c++) {
+      const cellVal = String(rowArray[c] || '').trim();
+      if (cellVal && attendanceMapBySap.has(cellVal)) {
+        return attendanceMapBySap.get(cellVal)!;
+      }
+    }
+
+    return { status: 'ABSENT', time: '--' };
+  };
 
   // 1. If originalBuffer is provided, parse and modify the actual workbook
   if (originalBuffer) {
@@ -529,11 +502,20 @@ export function exportExactSheetWithAttendance(
       const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
 
       if (rawRows && rawRows.length > 0) {
-        const { headerRowIndex, idCol, nameCol } = detectHeaderRow(rawRows);
+        const { headerRowIndex, headerRow, idCol, nameCol } = detectHeaderRow(rawRows);
+
+        // Check if Attendance Status and Time columns already exist in header
+        let statusColIndex = headerRow.findIndex((h) => h.toLowerCase().includes('attendance status'));
+        let timeColIndex = headerRow.findIndex((h) => h.toLowerCase().includes('attendance marked time') || h.toLowerCase().includes('attendance time'));
 
         const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-        const statusColIndex = range.e.c + 1;
-        const timeColIndex = range.e.c + 2;
+
+        if (statusColIndex === -1) {
+          statusColIndex = range.e.c + 1;
+        }
+        if (timeColIndex === -1) {
+          timeColIndex = statusColIndex === range.e.c + 1 ? range.e.c + 2 : range.e.c + 1;
+        }
 
         // Write headers at the end of the original sheet
         const statusHeaderRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: statusColIndex });
@@ -547,16 +529,7 @@ export function exportExactSheetWithAttendance(
           const rowArray = rawRows[rowIndex];
           if (!rowArray || rowArray.every((c) => String(c).trim() === '')) continue;
 
-          const rawId = idCol >= 0 && rowArray[idCol] !== undefined ? String(rowArray[idCol]).trim() : '';
-          const rawName = nameCol >= 0 && rowArray[nameCol] !== undefined ? String(rowArray[nameCol]).trim() : '';
-
-          let res: { status: string; time: string } = { status: 'ABSENT', time: '--' };
-
-          if (rawId && attendanceMapBySap.has(rawId)) {
-            res = attendanceMapBySap.get(rawId)!;
-          } else if (rawName && attendanceMapByName.has(rawName.toLowerCase())) {
-            res = attendanceMapByName.get(rawName.toLowerCase())!;
-          }
+          const res = resolveRowAttendance(rowArray, idCol, nameCol);
 
           const cellStatusRef = XLSX.utils.encode_cell({ r: rowIndex, c: statusColIndex });
           const cellTimeRef = XLSX.utils.encode_cell({ r: rowIndex, c: timeColIndex });
@@ -564,7 +537,7 @@ export function exportExactSheetWithAttendance(
           worksheet[cellTimeRef] = { t: 's', v: res.time };
         }
 
-        range.e.c = timeColIndex;
+        range.e.c = Math.max(range.e.c, statusColIndex, timeColIndex);
         worksheet['!ref'] = XLSX.utils.encode_range(range);
 
         const ext = format === 'csv' ? 'csv' : 'xlsx';
@@ -579,18 +552,10 @@ export function exportExactSheetWithAttendance(
 
   // 2. If originalMeta (headers & rows) is available
   if (originalMeta && originalMeta.headers && originalMeta.rows) {
+    const { idCol, nameCol } = detectHeaderRow([originalMeta.headers]);
     const headers = [...originalMeta.headers, 'Attendance Status', 'Attendance Marked Time'];
     const rows = originalMeta.rows.map((rowArray) => {
-      const rawId = String(rowArray[1] || rowArray[0] || '').trim();
-      const rawName = String(rowArray[2] || rowArray[1] || '').trim();
-
-      let res: { status: string; time: string } = { status: 'ABSENT', time: '--' };
-      if (rawId && attendanceMapBySap.has(rawId)) {
-        res = attendanceMapBySap.get(rawId)!;
-      } else if (rawName && attendanceMapByName.has(rawName.toLowerCase())) {
-        res = attendanceMapByName.get(rawName.toLowerCase())!;
-      }
-
+      const res = resolveRowAttendance(rowArray, idCol, nameCol);
       return [...rowArray, res.status, res.time];
     });
 
@@ -603,10 +568,35 @@ export function exportExactSheetWithAttendance(
     return;
   }
 
-  // 3. Fallback: If no original sheet ever existed
-  const currentStudents = roundStudents.filter((rs) => rs.roundId === roundId);
-  exportAnnotatedAttendanceExcel(companyName, roundName, roundId, currentStudents, format);
+  // 3. Clean fallback: ONLY if no original sheet ever existed
+  const fallbackData = studentsToScan.map((s) => ({
+    'SAP ID': s.sapId,
+    'Candidate Name': s.studentName,
+    'Attendance Status': s.attendanceStatus === 'PRESENT' || s.attendanceStatus === 'MANUALLY_MARKED' ? 'PRESENT' : 'ABSENT',
+    'Attendance Marked Time': s.attendanceTime || '--',
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(fallbackData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Attendance Report`);
+
+  const ext = format === 'csv' ? 'csv' : 'xlsx';
+  const fileName = `${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Attendance_Report.${ext}`;
+  XLSX.writeFile(workbook, fileName, { bookType: ext as any });
+}
+
+/**
+ * Compatibility alias: NEVER generates the old synthetic format.
+ * Delegates entirely to exportExactSheetWithAttendance!
+ */
+export function exportAnnotatedAttendanceExcel(
+  companyName: string,
+  roundName: string,
+  roundId: string,
+  roundStudents: RoundStudent[],
+  format: 'xlsx' | 'csv' = 'xlsx'
+) {
+  exportExactSheetWithAttendance(roundId, companyName, roundName, roundStudents, [], format);
 }
 
 export const exportOriginalSheetWithAttendanceStatus = exportExactSheetWithAttendance;
-

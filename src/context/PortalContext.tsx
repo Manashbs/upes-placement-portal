@@ -27,6 +27,7 @@ import {
 import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
 import { fetchCloudAttendanceEvents, recordAttendanceToCloud, subscribeToLiveCloudScans, CloudAttendanceEvent } from '../utils/cloudSync';
+import { saveSheetToStorage, getSheetBufferSync, getSheetMetaSync } from '../utils/sheetStorage';
 
 export interface ComprehensiveCompanyPayload {
   name: string;
@@ -130,76 +131,46 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   ]);
 
   // Store original Excel file buffers per round (roundId -> ArrayBuffer)
-  // Persisted to localStorage so it survives page reloads and browser refreshes
+  // Uses multi-layer storage (IndexedDB + memory + localStorage) so it survives page reloads and refreshes
   const [originalExcelBuffers, setOriginalExcelBuffers] = useState<Map<string, ArrayBuffer>>(new Map());
 
   const storeOriginalExcel = (roundId: string, buffer: ArrayBuffer, rawMeta?: { headers: string[]; rows: any[][] }) => {
     setOriginalExcelBuffers((prev) => {
       const next = new Map(prev);
       next.set(roundId, buffer);
+      next.set('LATEST', buffer);
       return next;
     });
 
-    // 1. Persist base64 to localStorage
-    try {
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      const len = bytes.byteLength;
-      for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64 = window.btoa(binary);
-      localStorage.setItem(`upes_excel_b64_${roundId}`, base64);
-    } catch (e) {
-      console.warn('Could not store excel base64 in localStorage:', e);
-    }
-
-    // 2. Persist raw headers and rows JSON to localStorage
-    if (rawMeta) {
-      try {
-        localStorage.setItem(`upes_excel_raw_${roundId}`, JSON.stringify(rawMeta));
-      } catch (e) {
-        console.warn('Could not store raw excel data in localStorage:', e);
-      }
-    }
+    // Save to multi-layer persistent sheet storage
+    saveSheetToStorage(roundId, buffer, rawMeta);
   };
 
   const getOriginalExcel = (roundId: string): ArrayBuffer | undefined => {
+    // 1. Check in-memory state map
     if (originalExcelBuffers.has(roundId)) {
       return originalExcelBuffers.get(roundId);
     }
+    if (originalExcelBuffers.has('LATEST')) {
+      return originalExcelBuffers.get('LATEST');
+    }
 
-    // Recover from localStorage base64 if not in memory
-    try {
-      const savedB64 = localStorage.getItem(`upes_excel_b64_${roundId}`);
-      if (savedB64) {
-        const binary_string = window.atob(savedB64);
-        const len = binary_string.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binary_string.charCodeAt(i);
-        }
-        const buf = bytes.buffer;
-        setOriginalExcelBuffers((prev) => {
-          const next = new Map(prev);
-          next.set(roundId, buf);
-          return next;
-        });
-        return buf;
-      }
-    } catch {}
+    // 2. Check multi-layer sheetStorage
+    const fromStorage = getSheetBufferSync(roundId);
+    if (fromStorage) {
+      setOriginalExcelBuffers((prev) => {
+        const next = new Map(prev);
+        next.set(roundId, fromStorage);
+        return next;
+      });
+      return fromStorage;
+    }
 
     return undefined;
   };
 
   const getOriginalExcelRaw = (roundId: string): { headers: string[]; rows: any[][] } | undefined => {
-    try {
-      const saved = localStorage.getItem(`upes_excel_raw_${roundId}`);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {}
-    return undefined;
+    return getSheetMetaSync(roundId);
   };
 
   // Sync to local storage for persistence & live sync across browser tabs

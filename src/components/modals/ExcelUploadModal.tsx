@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, ArrowRight, Sparkles, Download } from 'lucide-react';
-import { parseShortlistExcel, FuzzyParseResult, exportAnnotatedAttendanceExcel, exportOriginalSheetWithAttendanceLinks } from '../../utils/excelUtils';
+import { parseShortlistExcel, FuzzyParseResult, exportOriginalSheetWithAttendanceLinks, exportExactSheetWithAttendance } from '../../utils/excelUtils';
+import { saveSheetToStorage } from '../../utils/sheetStorage';
 import { Student, RoundStudent } from '../../types';
 
 interface ExcelUploadModalProps {
@@ -42,11 +43,18 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     const reader = new FileReader();
     reader.onload = (evt) => {
       const buffer = evt.target?.result as ArrayBuffer;
-      // Store the raw buffer so we can re-use the original sheet later
       setRawFileBuffer(buffer);
       const result = parseShortlistExcel(buffer, students);
       setParseResult(result);
       setIsProcessing(false);
+
+      // Immediately persist original sheet buffer and metadata to multi-layer storage
+      const roundKey = targetRoundId || 'LATEST';
+      const meta = result.headerRow && result.rawRows ? { headers: result.headerRow, rows: result.rawRows } : undefined;
+      storeOriginalExcel(roundKey, buffer, meta);
+      storeOriginalExcel('LATEST', buffer, meta);
+      saveSheetToStorage(roundKey, buffer, meta, file.name);
+      saveSheetToStorage('LATEST', buffer, meta, file.name);
     };
     reader.readAsArrayBuffer(file);
   };
@@ -118,11 +126,15 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       panelNumber: `Panel ${(i % 4) + 1}`,
     }));
 
-    exportAnnotatedAttendanceExcel(
+    exportExactSheetWithAttendance(
+      roundIdForLink,
       companyName || 'Recruiter',
       roundName || 'Shortlist',
-      roundIdForLink,
-      roundStudentsForExport
+      roundStudentsForExport,
+      students,
+      'xlsx',
+      rawFileBuffer || undefined,
+      parseResult?.headerRow && parseResult?.rawRows ? { headers: parseResult.headerRow, rows: parseResult.rawRows } : undefined
     );
   };
 
@@ -135,16 +147,17 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       resolveUnknownSapIds(createdStudents);
     }
 
-    // Store the original Excel file buffer and raw rows in context for attendance report download
+    // Store the original Excel file buffer and raw rows in context & persistent storage
     const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
     if (rawFileBuffer) {
-      storeOriginalExcel(
-        roundIdForLink,
-        rawFileBuffer,
-        parseResult.headerRow && parseResult.rawRows
-          ? { headers: parseResult.headerRow, rows: parseResult.rawRows }
-          : undefined
-      );
+      const meta = parseResult.headerRow && parseResult.rawRows
+        ? { headers: parseResult.headerRow, rows: parseResult.rawRows }
+        : undefined;
+
+      storeOriginalExcel(roundIdForLink, rawFileBuffer, meta);
+      storeOriginalExcel('LATEST', rawFileBuffer, meta);
+      saveSheetToStorage(roundIdForLink, rawFileBuffer, meta, fileName);
+      saveSheetToStorage('LATEST', rawFileBuffer, meta, fileName);
     }
 
     // Auto-download the original sheet with attendance links appended
