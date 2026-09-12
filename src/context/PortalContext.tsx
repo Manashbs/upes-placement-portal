@@ -109,7 +109,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [users, setUsers] = useState<PortalUser[]>(() => {
     try {
       const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer === 'prod_v7_only_director_manash') {
+      if (cleanVer === 'prod_v8_sprs_roster') {
         const saved = localStorage.getItem('upes_portal_users');
         if (saved) {
           const parsed: PortalUser[] = JSON.parse(saved);
@@ -167,19 +167,21 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     try {
       const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer !== 'prod_v7_only_director_manash') {
+      if (cleanVer !== 'prod_v8_sprs_roster') {
         localStorage.removeItem('upes_students');
         localStorage.removeItem('upes_companies');
         localStorage.removeItem('upes_drives');
         localStorage.removeItem('upes_rounds');
         localStorage.removeItem('upes_round_students');
-        localStorage.removeItem('upes_sprs');
         localStorage.removeItem('upes_offers');
         localStorage.removeItem('upes_portal_users');
         localStorage.setItem('upes_portal_users', JSON.stringify(initialUsers));
         setUsers(initialUsers);
         publishUsersToCloud(initialUsers);
-        localStorage.setItem('upes_clean_version', 'prod_v7_only_director_manash');
+        setSprs(initialSPRs);
+        localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
+        setSprCycle(initialSPRCycle);
+        localStorage.setItem('upes_clean_version', 'prod_v8_sprs_roster');
       }
     } catch {}
   }, []);
@@ -204,8 +206,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return saved ? JSON.parse(saved) : initialRoundStudents;
   });
   const [sprs, setSprs] = useState<SPR[]>(() => {
-    const saved = localStorage.getItem('upes_sprs');
-    return saved ? JSON.parse(saved) : initialSPRs;
+    try {
+      const cleanVer = localStorage.getItem('upes_clean_version');
+      if (cleanVer === 'prod_v8_sprs_roster') {
+        const saved = localStorage.getItem('upes_sprs');
+        if (saved) {
+          const parsed: SPR[] = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      }
+    } catch {}
+    return initialSPRs;
   });
   const [sprCycle, setSprCycle] = useState<SPRCycle>(initialSPRCycle);
   const [dutyAssignments, setDutyAssignments] = useState<SPRDutyAssignment[]>(initialDutyAssignments);

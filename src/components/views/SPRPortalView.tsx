@@ -3,7 +3,7 @@ import { usePortal } from '../../context/PortalContext';
 import { UserCheck, CheckCircle2, RotateCw, Calendar, MapPin, Clock, ArrowLeftRight } from 'lucide-react';
 
 export const SPRPortalView: React.FC = () => {
-  const { dutyAssignments, acceptDuty, markAttendance, rounds } = usePortal();
+  const { dutyAssignments, acceptDuty, markAttendance, rounds, currentUser } = usePortal();
   const [candidateSapInput, setCandidateSapInput] = useState('');
   const [selectedRoundId, setSelectedRoundId] = useState(rounds[1]?.id || rounds[0]?.id || '');
   const [verifyResult, setVerifyResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -23,7 +23,7 @@ export const SPRPortalView: React.FC = () => {
       <div className="bg-[#0B132B] rounded-3xl p-8 text-white shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 border border-slate-800">
         <div className="space-y-2">
           <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
-            SPR DESK — Welcome, Tanya Kapoor
+            SPR DESK — Welcome, {currentUser?.name || 'Representative'}
           </div>
           <h2 className="text-3xl font-extrabold tracking-tight">Student Placement Representative</h2>
           <p className="text-sm text-slate-300">

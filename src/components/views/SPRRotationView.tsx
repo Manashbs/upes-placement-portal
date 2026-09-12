@@ -104,7 +104,7 @@ export const SPRRotationView: React.FC = () => {
                   <div className="flex items-start justify-between">
                     <div className="flex items-center space-x-3">
                       <div className="w-12 h-12 rounded-2xl bg-[#0B132B] text-amber-400 flex items-center justify-center font-extrabold text-base shadow-xs group-hover:scale-105 transition-transform">
-                        {spr.name.split(' ').map((n) => n[0]).join('')}
+                        {spr.name.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()}
                       </div>
                       <div>
                         <div className="font-extrabold text-slate-900 text-base group-hover:text-amber-900 transition-colors">
@@ -212,7 +212,7 @@ export const SPRRotationView: React.FC = () => {
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0 bg-white">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-xl bg-[#0B132B] text-amber-400 font-extrabold flex items-center justify-center text-sm">
-                  {selectedSprDetails.name.split(' ').map((n) => n[0]).join('')}
+                  {selectedSprDetails.name.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()}
                 </div>
                 <div>
                   <h3 className="text-lg font-extrabold text-slate-900">
@@ -254,7 +254,7 @@ export const SPRRotationView: React.FC = () => {
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Contact</span>
                   <div className="text-xs font-medium text-slate-700 mt-0.5">
-                    {selectedSprDetails.phone || selectedSprDetails.email || 'Registered in Roster'}
+                    {selectedSprDetails.phone || 'Active in Representative Pool'}
                   </div>
                 </div>
               </div>
@@ -395,27 +395,15 @@ export const SPRRotationView: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Email Address</label>
-                  <input
-                    type="email"
-                    placeholder="student@stu.upes.ac.in"
-                    value={newSprEmail}
-                    onChange={(e) => setNewSprEmail(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-[11px]"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Phone Number</label>
-                  <input
-                    type="text"
-                    placeholder="+91 98765 00000"
-                    value={newSprPhone}
-                    onChange={(e) => setNewSprPhone(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-[11px]"
-                  />
-                </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Phone Number (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="+91 98765 00000"
+                  value={newSprPhone}
+                  onChange={(e) => setNewSprPhone(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-[11px]"
+                />
               </div>
 
               <div className="pt-3 flex justify-end space-x-3 border-t border-slate-100">
