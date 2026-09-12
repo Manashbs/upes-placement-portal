@@ -25,7 +25,8 @@ export const RoundsView: React.FC = () => {
     : null;
 
   // New Round Form state
-  const [companyId, setCompanyId] = useState(companies[0]?.id || 'comp-1');
+  const [companyId, setCompanyId] = useState(companies[0]?.id || '');
+  const [companyError, setCompanyError] = useState<string | null>(null);
   const [roundName, setRoundName] = useState('');
   const [roundType, setRoundType] = useState<RoundType>('TECHNICAL_INTERVIEW');
   const [roundMode, setRoundMode] = useState<RoundMode>('ON_CAMPUS');
@@ -43,13 +44,15 @@ export const RoundsView: React.FC = () => {
     () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
   );
 
-  const filteredRounds = rounds.filter((r) => {
-    if (activeTab === 'ALL') return true;
-    if (activeTab === 'LIVE') return r.status === 'IN_PROGRESS';
-    if (activeTab === 'UPCOMING') return r.status === 'SCHEDULED';
-    if (activeTab === 'COMPLETED') return r.status === 'COMPLETED';
-    return true;
-  });
+  const filteredRounds = rounds
+    .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+    .filter((r) => {
+      if (activeTab === 'ALL') return true;
+      if (activeTab === 'LIVE') return r.status === 'IN_PROGRESS';
+      if (activeTab === 'UPCOMING') return r.status === 'SCHEDULED';
+      if (activeTab === 'COMPLETED') return r.status === 'COMPLETED';
+      return true;
+    });
 
   const handleTotalVenuesChange = (count: number) => {
     const validCount = Math.max(1, Math.min(10, count));
@@ -87,14 +90,23 @@ export const RoundsView: React.FC = () => {
   };
 
   const handleFinalizeCreateRound = () => {
+    if (!companyId || !companies.some((c) => c.id === companyId)) {
+      setCompanyError('Target Company is mandatory. Please select a registered company.');
+      return;
+    }
     const targetComp = companies.find((c) => c.id === companyId);
+    if (!targetComp) {
+      setCompanyError('Selected target company does not exist.');
+      return;
+    }
+
     const combinedVenueString = venuesList.filter(Boolean).join(' | ');
 
     createRound(
       {
         id: createRoundId,
-        companyId,
-        companyName: targetComp?.name || 'Company',
+        companyId: targetComp.id,
+        companyName: targetComp.name,
         name: roundName || `${roundType} Round`,
         type: roundType,
         mode: roundMode,
@@ -110,6 +122,7 @@ export const RoundsView: React.FC = () => {
     );
     setShowCreateModal(false);
     setShortlistedStudentsTemp([]);
+    setCompanyError(null);
   };
 
   return (
@@ -332,16 +345,37 @@ export const RoundsView: React.FC = () => {
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Target Company</label>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Target Company <span className="text-rose-600 font-extrabold">* (Mandatory)</span>
+                </label>
                 <select
+                  required
                   value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  onChange={(e) => {
+                    setCompanyId(e.target.value);
+                    setCompanyError(null);
+                  }}
+                  className={`w-full bg-slate-50 border rounded-xl p-2.5 font-bold outline-none transition-all ${
+                    companyError || !companyId
+                      ? 'border-rose-400 ring-2 ring-rose-100'
+                      : 'border-slate-200 focus:border-amber-500'
+                  }`}
                 >
+                  <option value="" disabled>-- Select Target Company (Required) --</option>
                   {companies.map((c) => (
                     <option key={c.id} value={c.id}>{c.name} ({c.category})</option>
                   ))}
                 </select>
+                {companies.length === 0 && (
+                  <p className="text-[11px] text-rose-600 font-semibold mt-1">
+                    ⚠️ No companies registered yet. Please create a company first in the Companies tab.
+                  </p>
+                )}
+                {companyError && (
+                  <p className="text-[11px] text-rose-600 font-bold mt-1">
+                    {companyError}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -498,7 +532,8 @@ export const RoundsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleFinalizeCreateRound}
-                  className="px-5 py-2.5 bg-[#0B132B] text-white font-bold rounded-xl shadow-md cursor-pointer"
+                  disabled={!companyId || companies.length === 0}
+                  className="px-5 py-2.5 bg-[#0B132B] hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-md cursor-pointer transition-all"
                 >
                   Create & Launch Selection Round
                 </button>

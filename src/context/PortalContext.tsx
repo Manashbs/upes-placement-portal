@@ -198,7 +198,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies);
         if (idbDrives && idbDrives.length > 0) setDrives(idbDrives);
-        if (idbRounds && idbRounds.length > 0) setRounds(idbRounds);
+        if (idbRounds && idbRounds.length > 0) {
+          const valid = idbRounds.filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId);
+          setRounds(valid);
+        }
         if (idbRoundStudents && idbRoundStudents.length > 0) setRoundStudents(idbRoundStudents);
         if (idbStudents && idbStudents.length > 0) setStudents(idbStudents);
         if (idbUsers && idbUsers.length > 0) setUsers(sanitizeUsers(idbUsers));
@@ -223,9 +226,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setRounds((prev) => {
             const existingIds = new Set(prev.map((r) => r.id));
             const merged = [...prev];
-            remoteData.rounds!.forEach((rr) => {
-              if (!existingIds.has(rr.id)) merged.push(rr);
-            });
+            remoteData.rounds!
+              .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+              .forEach((rr) => {
+                if (!existingIds.has(rr.id)) merged.push(rr);
+              });
             return merged;
           });
         }
@@ -287,8 +292,18 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [drives, setDrives] = useState<Drive[]>(initialDrives);
   const [rounds, setRounds] = useState<Round[]>(() => {
-    const saved = localStorage.getItem('upes_rounds');
-    return saved ? JSON.parse(saved) : initialRounds;
+    try {
+      const saved = localStorage.getItem('upes_rounds');
+      if (saved) {
+        const parsed: Round[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId && r.companyName
+          );
+        }
+      }
+    } catch {}
+    return initialRounds;
   });
   const [roundStudents, setRoundStudents] = useState<RoundStudent[]>(() => {
     const saved = localStorage.getItem('upes_round_students');
@@ -747,11 +762,23 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     shortlistedStudents: Student[],
     customSessionId?: string
   ) => {
-    const companyName = roundData.companyName || 'Company';
-    const roundName = roundData.name || 'Round';
+    const rawCompanyId = (roundData.companyId || '').trim();
+    if (!rawCompanyId || rawCompanyId === 'comp-1') {
+      console.error('Cannot create round: Target company is mandatory (NOT NULL).');
+      return;
+    }
+
+    const targetCompany = companies.find((c) => c.id === rawCompanyId);
+    if (!targetCompany) {
+      console.error('Cannot create round: Target company does not exist in registered companies.');
+      return;
+    }
+
+    const companyId = targetCompany.id;
+    const companyName = targetCompany.name;
+    const roundName = roundData.name || `${roundData.type || 'Drive'} Round`;
     const roundId = roundData.id || `rnd-${Date.now()}`;
-    const driveId = roundData.driveId || 'drv-1';
-    const companyId = roundData.companyId || 'comp-1';
+    const driveId = roundData.driveId || drives.find((d) => d.companyId === companyId)?.id || `drv-${companyId}`;
 
     const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, customSessionId);
 
