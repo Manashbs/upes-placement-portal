@@ -5,6 +5,7 @@ import confetti from 'canvas-confetti';
 import jsQR from 'jsqr';
 
 import { validateQRToken } from '../../utils/qrUtils';
+import { recordAttendanceToCloud, fetchCloudAttendanceEvents } from '../../utils/cloudSync';
 
 export function parseScanUrlParams() {
   if (typeof window === 'undefined') return { roundId: '', sapId: '', candidateName: '', token: '' };
@@ -32,11 +33,21 @@ export const CandidateMobileScanView: React.FC = () => {
   const { rounds, students, roundStudents, markAttendance } = usePortal();
   const [params, setParams] = useState(parseScanUrlParams);
   const [justMarked, setJustMarked] = useState(false);
+  const [isCloudMarked, setIsCloudMarked] = useState(false);
   const [mismatchError, setMismatchError] = useState<string | null>(null);
   const [cameraStatus, setCameraStatus] = useState<'STARTING' | 'ACTIVE' | 'ERROR'>('STARTING');
+  
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const isScanningRef = useRef(false);
+
+  // Dynamic references for scanning loop without causing re-renders or stream restarts
+  const paramsRef = useRef(params);
+  const cleanSapRef = useRef('');
+  const displayNameRef = useRef('');
+  const targetRoundRef = useRef<any>(null);
+  const roundDisplayNameRef = useRef('');
 
   useEffect(() => {
     const handleUrlChange = () => {
@@ -72,47 +83,121 @@ export const CandidateMobileScanView: React.FC = () => {
 
   const isAlreadyMarkedInRound =
     Boolean(cleanSap) &&
-    Boolean(matchedRoundStudent) &&
-    (matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
-      matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED');
+    (isCloudMarked ||
+      (Boolean(matchedRoundStudent) &&
+        (matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
+          matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED')));
 
   const isPresent = justMarked || isAlreadyMarkedInRound;
 
-  // Real-Time Camera Frame Scanning Loop via jsQR
+  // Keep refs in sync for the scan loop
   useEffect(() => {
-    if (isPresent) return;
+    paramsRef.current = params;
+    cleanSapRef.current = cleanSap;
+    displayNameRef.current = displayName;
+    targetRoundRef.current = targetRound;
+    roundDisplayNameRef.current = roundDisplayName;
+  }, [params, cleanSap, displayName, targetRound, roundDisplayName]);
 
-    let animationFrameId: number;
-    let currentStream: MediaStream | null = null;
-    let isSubscribed = true;
+  // Check cloud registry on load to see if already verified
+  useEffect(() => {
+    let active = true;
+    async function checkCloudStatus() {
+      if (!cleanSap || !params.roundId) return;
+      try {
+        const events = await fetchCloudAttendanceEvents();
+        const found = events.some(
+          (e) => e.roundId === params.roundId && String(e.sapId).trim() === cleanSap
+        );
+        if (found && active) {
+          setIsCloudMarked(true);
+        }
+      } catch {}
+    }
+    checkCloudStatus();
+    return () => {
+      active = false;
+    };
+  }, [cleanSap, params.roundId]);
 
-    async function startCameraAndScan() {
+  // 1. Stable Camera Stream Lifecycle (runs ONCE, never flickers or repeatedly restarts)
+  useEffect(() => {
+    if (isPresent) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      isScanningRef.current = false;
+      return;
+    }
+
+    let isMounted = true;
+
+    async function startCamera() {
+      // If camera is already active, don't re-create stream
+      if (streamRef.current && streamRef.current.active) {
+        if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+        }
+        return;
+      }
+
       try {
         setCameraStatus('STARTING');
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 640 },
+            height: { ideal: 640 },
+          },
+          audio: false,
         });
 
-        if (isSubscribed && videoRef.current) {
-          videoRef.current.srcObject = stream;
-          currentStream = stream;
-          setCameraStatus('ACTIVE');
-          isScanningRef.current = true;
-          animationFrameId = requestAnimationFrame(scanFrame);
+        if (!isMounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
         }
-      } catch {
-        if (isSubscribed) {
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute('playsinline', 'true');
+          await videoRef.current.play().catch(() => {});
+        }
+        setCameraStatus('ACTIVE');
+        isScanningRef.current = true;
+      } catch (err) {
+        if (isMounted) {
           setCameraStatus('ERROR');
         }
       }
     }
 
+    startCamera();
+
+    return () => {
+      isMounted = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      isScanningRef.current = false;
+    };
+  }, [isPresent]);
+
+  // 2. Smooth Scanning Loop with 100ms throttle (zero lag, no stream interruptions)
+  useEffect(() => {
+    if (isPresent) return;
+
+    let scanTimerId: any;
+    let isMounted = true;
+
     const scanFrame = () => {
-      if (!isScanningRef.current) return;
+      if (!isMounted || !isScanningRef.current) return;
 
       const video = videoRef.current;
 
-      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+      if (video && video.readyState >= 2 && video.videoWidth > 0) {
         if (!canvasRef.current) {
           canvasRef.current = document.createElement('canvas');
         }
@@ -134,48 +219,65 @@ export const CandidateMobileScanView: React.FC = () => {
           if (code && code.data) {
             const scannedText = code.data;
             const tokenCheck = validateQRToken(scannedText);
+            const curParams = paramsRef.current;
+            const curRound = targetRoundRef.current;
+            const curSap = cleanSapRef.current;
+            const curName = displayNameRef.current;
 
             // Verify if scanned QR corresponds to the round in the candidate's link
             const isMatchingRound =
-              (tokenCheck.data?.roundId && tokenCheck.data.roundId === params.roundId) ||
-              scannedText === targetRound?.qrToken ||
-              (Boolean(params.roundId) && scannedText.includes(params.roundId)) ||
-              (tokenCheck.valid && !tokenCheck.data?.roundId); // fallback for generic UPES token
+              (tokenCheck.data?.roundId && tokenCheck.data.roundId === curParams.roundId) ||
+              scannedText === curRound?.qrToken ||
+              (Boolean(curParams.roundId) && scannedText.includes(curParams.roundId)) ||
+              (tokenCheck.valid && !tokenCheck.data?.roundId);
 
-            if (isMatchingRound && cleanSap && params.roundId) {
+            if (isMatchingRound && curSap && curParams.roundId) {
               isScanningRef.current = false;
-              markAttendance(params.roundId, cleanSap, 'REAL_CAMERA_QR_SCAN', displayName);
+              const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+              // 1. Mark locally
+              markAttendance(curParams.roundId, curSap, 'REAL_CAMERA_QR_SCAN', curName);
+
+              // 2. Publish to Cloud Sync (instantly updates recruiter dashboard in real-time)
+              recordAttendanceToCloud({
+                roundId: curParams.roundId,
+                sapId: curSap,
+                studentName: curName,
+                status: 'PRESENT',
+                time: nowTime,
+                method: 'REAL_CAMERA_QR_SCAN',
+              });
+
+              // 3. Update UI & trigger celebratory confetti
               setJustMarked(true);
               setMismatchError(null);
               confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
 
-              if (currentStream) {
-                currentStream.getTracks().forEach((track) => track.stop());
+              // 4. Turn off camera
+              if (streamRef.current) {
+                streamRef.current.getTracks().forEach((track) => track.stop());
+                streamRef.current = null;
               }
               return;
-            } else if (tokenCheck.data?.roundId && tokenCheck.data.roundId !== params.roundId) {
+            } else if (tokenCheck.data?.roundId && tokenCheck.data.roundId !== curParams.roundId) {
               setMismatchError(
-                `Scanned QR belongs to "${tokenCheck.data.companyName} · ${tokenCheck.data.roundName}". Please scan the QR code for "${roundDisplayName}".`
+                `Scanned QR belongs to "${tokenCheck.data.companyName} · ${tokenCheck.data.roundName}". Please scan the QR code for "${roundDisplayNameRef.current}".`
               );
             }
           }
         }
       }
 
-      animationFrameId = requestAnimationFrame(scanFrame);
+      scanTimerId = setTimeout(scanFrame, 100);
     };
 
-    startCameraAndScan();
+    scanTimerId = setTimeout(scanFrame, 400);
 
     return () => {
-      isSubscribed = false;
-      isScanningRef.current = false;
-      if (animationFrameId) cancelAnimationFrame(animationFrameId);
-      if (currentStream) {
-        currentStream.getTracks().forEach((track) => track.stop());
-      }
+      isMounted = false;
+      if (scanTimerId) clearTimeout(scanTimerId);
     };
-  }, [isPresent, params.roundId, cleanSap, displayName, markAttendance, targetRound, roundDisplayName]);
+  }, [isPresent, markAttendance]);
 
   return (
     <div className="min-h-screen w-full bg-[#EEF2F6] flex flex-col items-center justify-center p-4 font-sans select-none relative overflow-hidden">

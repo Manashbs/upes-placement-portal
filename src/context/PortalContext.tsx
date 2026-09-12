@@ -26,6 +26,7 @@ import {
 } from '../mock/mockData';
 import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
+import { fetchCloudAttendanceEvents, recordAttendanceToCloud } from '../utils/cloudSync';
 
 export interface ComprehensiveCompanyPayload {
   name: string;
@@ -224,10 +225,64 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const pollInterval = setInterval(reloadFromStorage, 1000);
 
+    // Real-Time Cross-Device Cloud Sync (syncs iPhone/Android scans to recruiter laptop)
+    const syncFromCloud = async () => {
+      try {
+        const events = await fetchCloudAttendanceEvents();
+        if (events && events.length > 0) {
+          setRoundStudents((prevRs) => {
+            let changed = false;
+            const updatedRs = prevRs.map((rs) => {
+              const matchingCloudEvent = events.find(
+                (ev) => ev.roundId === rs.roundId && String(ev.sapId).trim() === String(rs.sapId).trim()
+              );
+              if (matchingCloudEvent && rs.attendanceStatus !== 'PRESENT' && rs.attendanceStatus !== 'MANUALLY_MARKED') {
+                changed = true;
+                return {
+                  ...rs,
+                  attendanceStatus: 'PRESENT' as const,
+                  attendanceTime: matchingCloudEvent.time || rs.attendanceTime || 'Just now',
+                  markedBy: matchingCloudEvent.method || 'REAL_CAMERA_QR_SCAN',
+                  studentName: matchingCloudEvent.studentName || rs.studentName,
+                };
+              }
+              return rs;
+            });
+
+            if (changed) {
+              try {
+                localStorage.setItem('upes_round_students', JSON.stringify(updatedRs));
+              } catch {}
+              setRounds((prevRounds) => {
+                const nextRounds = prevRounds.map((r) => {
+                  const count = updatedRs.filter(
+                    (item) => item.roundId === r.id && (item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED')
+                  ).length;
+                  return { ...r, attendedCount: count };
+                });
+                try {
+                  localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+                } catch {}
+                return nextRounds;
+              });
+              return updatedRs;
+            }
+            return prevRs;
+          });
+        }
+      } catch (err) {
+        console.warn('[CloudSync] Polling error:', err);
+      }
+    };
+
+    const cloudPollInterval = setInterval(syncFromCloud, 2000);
+    syncFromCloud(); // initial fetch on mount
+
     return () => {
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('upes_attendance_updated', reloadFromStorage);
       clearInterval(pollInterval);
+      clearInterval(cloudPollInterval);
       if (bc) bc.close();
     };
   }, []);
@@ -608,6 +663,16 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
+    // Broadcast to Cloud Sync for cross-device real-time sync
+    recordAttendanceToCloud({
+      roundId,
+      sapId: cleanSap,
+      studentName: resolvedName,
+      status: 'PRESENT',
+      time: nowTime,
+      method,
+    });
+
     addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${cleanSap}) in round ${roundId} via ${method}.`);
     return { success: true, message: `Attendance verified successfully for ${resolvedName} (${cleanSap})!` };
   };
@@ -635,6 +700,17 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
+    if (status === 'PRESENT') {
+      recordAttendanceToCloud({
+        roundId,
+        sapId: cleanSap,
+        studentName: cleanSap,
+        status: 'PRESENT',
+        time: nowTime,
+        method: `MANUAL_OVERRIDE: ${reason}`,
+      });
+    }
 
     addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${cleanSap}. Reason: ${reason}`);
   };
