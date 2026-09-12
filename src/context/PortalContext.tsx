@@ -31,6 +31,14 @@ import { generateRoundQRToken } from '../utils/qrUtils';
 import { fetchCloudAttendanceEvents, recordAttendanceToCloud, subscribeToLiveCloudScans, CloudAttendanceEvent } from '../utils/cloudSync';
 import { saveSheetToStorage, getSheetBufferSync, getSheetMetaSync } from '../utils/sheetStorage';
 import { fetchCloudUsers, publishUsersToCloud } from '../utils/userSync';
+import {
+  saveToIDB,
+  getFromIDB,
+  fetchRemoteDatabase,
+  persistToRemoteDatabase,
+  sanitizeUsers,
+  sanitizeSPRs,
+} from '../utils/portalDb';
 
 export interface ComprehensiveCompanyPayload {
   name: string;
@@ -169,42 +177,102 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [activeTab, setActiveTab] = useState<string>('command-center');
 
-  // Automatic clean purge of old mock records and unwanted accounts from localStorage
+  // Permanent Database Sync on Mount: IndexedDB + Cloud Database (/api/db)
   useEffect(() => {
-    try {
-      const cleanVer = localStorage.getItem('upes_clean_version');
-      const savedSprs = localStorage.getItem('upes_sprs');
-      let sprHasDummy = false;
-      if (savedSprs) {
-        try {
-          const parsed = JSON.parse(savedSprs);
-          if (isDummySprList(parsed)) {
-            sprHasDummy = true;
-          }
-        } catch {
-          sprHasDummy = true;
-        }
-      } else {
-        sprHasDummy = true;
-      }
+    let isMounted = true;
 
-      if (cleanVer !== 'prod_v9_50_sprs_force' || sprHasDummy) {
-        localStorage.removeItem('upes_students');
-        localStorage.removeItem('upes_companies');
-        localStorage.removeItem('upes_drives');
-        localStorage.removeItem('upes_rounds');
-        localStorage.removeItem('upes_round_students');
-        localStorage.removeItem('upes_offers');
-        localStorage.removeItem('upes_portal_users');
-        localStorage.setItem('upes_portal_users', JSON.stringify(initialUsers));
-        setUsers(initialUsers);
-        publishUsersToCloud(initialUsers);
-        setSprs(initialSPRs);
-        localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
-        setSprCycle(initialSPRCycle);
-        localStorage.setItem('upes_clean_version', 'prod_v9_50_sprs_force');
+    const loadPermanentDatabase = async () => {
+      try {
+        // 1. Load from browser permanent IndexedDB
+        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs] = await Promise.all([
+          getFromIDB<PortalUser[]>('users'),
+          getFromIDB<Company[]>('companies'),
+          getFromIDB<Drive[]>('drives'),
+          getFromIDB<Round[]>('rounds'),
+          getFromIDB<RoundStudent[]>('roundStudents'),
+          getFromIDB<Student[]>('students'),
+          getFromIDB<SPR[]>('sprs'),
+        ]);
+
+        if (!isMounted) return;
+
+        if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies);
+        if (idbDrives && idbDrives.length > 0) setDrives(idbDrives);
+        if (idbRounds && idbRounds.length > 0) setRounds(idbRounds);
+        if (idbRoundStudents && idbRoundStudents.length > 0) setRoundStudents(idbRoundStudents);
+        if (idbStudents && idbStudents.length > 0) setStudents(idbStudents);
+        if (idbUsers && idbUsers.length > 0) setUsers(sanitizeUsers(idbUsers));
+        if (idbSprs && idbSprs.length > 0) setSprs(sanitizeSPRs(idbSprs));
+
+        // 2. Fetch and merge latest from Cloud Database (/api/db)
+        const remoteData = await fetchRemoteDatabase();
+        if (!isMounted || !remoteData) return;
+
+        if (Array.isArray(remoteData.companies) && remoteData.companies.length > 0) {
+          setCompanies((prev) => {
+            const existingIds = new Set(prev.map((c) => c.id));
+            const merged = [...prev];
+            remoteData.companies!.forEach((rc) => {
+              if (!existingIds.has(rc.id)) merged.push(rc);
+            });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.rounds) && remoteData.rounds.length > 0) {
+          setRounds((prev) => {
+            const existingIds = new Set(prev.map((r) => r.id));
+            const merged = [...prev];
+            remoteData.rounds!.forEach((rr) => {
+              if (!existingIds.has(rr.id)) merged.push(rr);
+            });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.drives) && remoteData.drives.length > 0) {
+          setDrives((prev) => {
+            const existingIds = new Set(prev.map((d) => d.id));
+            const merged = [...prev];
+            remoteData.drives!.forEach((rd) => {
+              if (!existingIds.has(rd.id)) merged.push(rd);
+            });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.users) && remoteData.users.length > 0) {
+          setUsers((prev) => sanitizeUsers([...prev, ...remoteData.users!]));
+        }
+
+        if (Array.isArray(remoteData.roundStudents) && remoteData.roundStudents.length > 0) {
+          setRoundStudents((prev) => {
+            const key = (rs: RoundStudent) => `${rs.roundId}_${rs.sapId}`;
+            const map = new Map<string, RoundStudent>();
+            prev.forEach((p) => map.set(key(p), p));
+            remoteData.roundStudents!.forEach((rs) => {
+              const existing = map.get(key(rs));
+              if (!existing || (existing.attendanceStatus === 'PENDING' && rs.attendanceStatus !== 'PENDING')) {
+                map.set(key(rs), rs);
+              }
+            });
+            return Array.from(map.values());
+          });
+        }
+
+        if (Array.isArray(remoteData.sprs) && remoteData.sprs.length > 0) {
+          setSprs((prev) => sanitizeSPRs(prev.length >= 50 ? prev : remoteData.sprs!));
+        }
+      } catch (err) {
+        console.warn('[PortalDB] Init error:', err);
       }
-    } catch {}
+    };
+
+    loadPermanentDatabase();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const [students, setStudents] = useState<Student[]>(() => {
@@ -292,30 +360,59 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return getSheetMetaSync(roundId);
   };
 
-  // Sync to local storage for persistence & live sync across browser tabs
+  // Multi-tier Database Persistence: localStorage + IndexedDB + Cloud Database
   useEffect(() => {
-    localStorage.setItem('upes_students', JSON.stringify(students));
+    try {
+      localStorage.setItem('upes_students', JSON.stringify(students));
+      saveToIDB('students', students);
+    } catch {}
   }, [students]);
 
   useEffect(() => {
-    localStorage.setItem('upes_companies', JSON.stringify(companies));
+    try {
+      localStorage.setItem('upes_companies', JSON.stringify(companies));
+      saveToIDB('companies', companies);
+      persistToRemoteDatabase({ companies });
+    } catch {}
   }, [companies]);
 
   useEffect(() => {
-    localStorage.setItem('upes_sprs', JSON.stringify(sprs));
+    try {
+      localStorage.setItem('upes_drives', JSON.stringify(drives));
+      saveToIDB('drives', drives);
+      persistToRemoteDatabase({ drives });
+    } catch {}
+  }, [drives]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_sprs', JSON.stringify(sprs));
+      saveToIDB('sprs', sprs);
+      persistToRemoteDatabase({ sprs });
+    } catch {}
   }, [sprs]);
 
   useEffect(() => {
-    localStorage.setItem('upes_rounds', JSON.stringify(rounds));
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(rounds));
+      saveToIDB('rounds', rounds);
+      persistToRemoteDatabase({ rounds });
+    } catch {}
   }, [rounds]);
 
   useEffect(() => {
-    localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
+    try {
+      localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
+      saveToIDB('roundStudents', roundStudents);
+      persistToRemoteDatabase({ roundStudents });
+    } catch {}
   }, [roundStudents]);
 
   useEffect(() => {
     try {
       localStorage.setItem('upes_portal_users', JSON.stringify(users));
+      saveToIDB('users', users);
+      persistToRemoteDatabase({ users });
     } catch {}
   }, [users]);
 
