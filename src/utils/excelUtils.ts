@@ -27,6 +27,59 @@ export function generateCandidateAttendanceLink(roundId: string, sapId: string, 
   return `${origin}/#scan=${encodeURIComponent(roundId)}&t=${tokenHash}${nameParam}&r=${encodeURIComponent(sapId)}`;
 }
 
+// Broadened keyword lists for smart column detection across any company format
+const ID_KEYWORDS = [
+  'sap', 'reg', 'applicant', 'candidate', 'roll', 'urn', 'id', 'no', 'code',
+  's.no', 'sn', 'sl', 'enrollment', 'enroll', 'usn', 'prn', 'scholar',
+  'employee', 'reference', 'ref', 'token', 'serial', 'index', 'admission',
+  'hall ticket', 'seat', 'htno', 'university',
+];
+const NAME_KEYWORDS = ['name', 'candidate', 'applicant', 'student', 'full name', 'person', 'participant'];
+const EMAIL_KEYWORDS = ['email', 'mail', 'e-mail', 'gmail', 'outlook'];
+const PHONE_KEYWORDS = ['phone', 'mobile', 'contact', 'cell', 'number', 'whatsapp', 'tel'];
+const BRANCH_KEYWORDS = ['branch', 'department', 'dept', 'stream', 'course', 'discipline', 'program', 'specialization', 'degree', 'major'];
+
+/**
+ * Find the header row index and column mappings from a raw rows array.
+ * Scans the first 10 rows to find a row that looks like headers.
+ */
+function detectHeaderRow(rawRows: any[][]) {
+  let headerRowIndex = 0;
+
+  for (let i = 0; i < Math.min(10, rawRows.length); i++) {
+    const rowStr = rawRows[i].map((c) => String(c).toLowerCase()).join(' ');
+    const hasName = NAME_KEYWORDS.some((k) => rowStr.includes(k));
+    const hasId = ID_KEYWORDS.some((k) => rowStr.includes(k));
+    const hasEmail = EMAIL_KEYWORDS.some((k) => rowStr.includes(k));
+    const hasBranch = BRANCH_KEYWORDS.some((k) => rowStr.includes(k));
+
+    if ((hasName && (hasId || hasEmail || hasBranch)) || (hasId && hasEmail)) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  const headerRow = rawRows[headerRowIndex].map((h) => String(h).trim());
+
+  const findColIndex = (keywords: string[]) => {
+    return headerRow.findIndex((h) => {
+      const lower = h.toLowerCase();
+      return keywords.some((k) => lower.includes(k));
+    });
+  };
+
+  return {
+    headerRowIndex,
+    headerRow,
+    headersFound: headerRow.filter(Boolean),
+    idCol: findColIndex(ID_KEYWORDS),
+    nameCol: findColIndex(NAME_KEYWORDS),
+    emailCol: findColIndex(EMAIL_KEYWORDS),
+    phoneCol: findColIndex(PHONE_KEYWORDS),
+    branchCol: findColIndex(BRANCH_KEYWORDS),
+  };
+}
+
 export function parseShortlistExcel(
   fileData: ArrayBuffer,
   masterStudents: Student[]
@@ -45,43 +98,7 @@ export function parseShortlistExcel(
     };
   }
 
-  // 1. Scan for Header Row dynamically across rows 0-10
-  let headerRowIndex = 0;
-  const idKeywords = ['sap', 'reg', 'applicant', 'candidate', 'roll', 'urn', 'id', 'no', 'code', 's.no', 'sn', 'sl'];
-  const nameKeywords = ['name', 'candidate', 'applicant', 'student', 'full name', 'person'];
-  const emailKeywords = ['email', 'mail', 'e-mail'];
-  const phoneKeywords = ['phone', 'mobile', 'contact', 'cell', 'number'];
-  const branchKeywords = ['branch', 'department', 'dept', 'stream', 'course', 'discipline', 'program', 'specialization'];
-
-  for (let i = 0; i < Math.min(10, rawRows.length); i++) {
-    const rowStr = rawRows[i].map((c) => String(c).toLowerCase()).join(' ');
-    const hasName = nameKeywords.some((k) => rowStr.includes(k));
-    const hasId = idKeywords.some((k) => rowStr.includes(k));
-    const hasEmail = emailKeywords.some((k) => rowStr.includes(k));
-    const hasBranch = branchKeywords.some((k) => rowStr.includes(k));
-
-    if ((hasName && (hasId || hasEmail || hasBranch)) || (hasId && hasEmail)) {
-      headerRowIndex = i;
-      break;
-    }
-  }
-
-  const headerRow = rawRows[headerRowIndex].map((h) => String(h).trim());
-  const headersFound = headerRow.filter(Boolean);
-
-  // Helper to locate column index by header name keywords
-  const findColIndex = (keywords: string[]) => {
-    return headerRow.findIndex((h) => {
-      const lower = h.toLowerCase();
-      return keywords.some((k) => lower.includes(k));
-    });
-  };
-
-  const idCol = findColIndex(idKeywords);
-  const nameCol = findColIndex(nameKeywords);
-  const emailCol = findColIndex(emailKeywords);
-  const phoneCol = findColIndex(phoneKeywords);
-  const branchCol = findColIndex(branchKeywords);
+  const { headerRowIndex, headersFound, idCol, nameCol, emailCol, phoneCol, branchCol } = detectHeaderRow(rawRows);
 
   const matchedStudents: MatchedCandidate[] = [];
   const unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[] = [];
@@ -236,4 +253,215 @@ export function exportAnnotatedAttendanceExcel(
   const ext = format === 'csv' ? 'csv' : 'xlsx';
   const fileName = `UPES_${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Attendance_Report.${ext}`;
   XLSX.writeFile(workbook, fileName, { bookType: ext as any });
+}
+
+/**
+ * Preserves the original company-provided Excel sheet exactly as-is and appends
+ * an "Attendance Link" column at the very end. Each candidate row gets a unique
+ * personalized mobile scan URL.
+ *
+ * This is the key function that solves the "give me back MY sheet with links" requirement.
+ */
+export function exportOriginalSheetWithAttendanceLinks(
+  originalFileData: ArrayBuffer,
+  roundId: string,
+  companyName: string,
+  roundName: string,
+  matchedStudents: MatchedCandidate[],
+  unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[],
+  masterStudents: Student[]
+): void {
+  const workbook = XLSX.read(originalFileData, { type: 'array' });
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+  if (!rawRows || rawRows.length === 0) return;
+
+  const { headerRowIndex, idCol, nameCol, emailCol } = detectHeaderRow(rawRows);
+
+  // Find the last column index in the original sheet
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  const newColIndex = range.e.c + 1;
+
+  // Write the "Attendance Link" header in the header row
+  const headerCellRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: newColIndex });
+  worksheet[headerCellRef] = { t: 's', v: 'Attendance Link' };
+
+  // Build lookup maps for matching rows to students
+  const sapByEmail = new Map<string, string>();
+  const sapByName = new Map<string, string>();
+  const nameByEmail = new Map<string, string>();
+  const nameByName = new Map<string, string>();
+
+  matchedStudents.forEach((m) => {
+    const sapId = m.student.sapId;
+    const name = m.student.name;
+    if (m.recruiterData.rawEmail) {
+      sapByEmail.set(m.recruiterData.rawEmail.toLowerCase().trim(), sapId);
+      nameByEmail.set(m.recruiterData.rawEmail.toLowerCase().trim(), name);
+    }
+    if (m.recruiterData.rawName) {
+      sapByName.set(m.recruiterData.rawName.toLowerCase().trim(), sapId);
+      nameByName.set(m.recruiterData.rawName.toLowerCase().trim(), name);
+    }
+  });
+
+  // Also build lookup for unmatched rows (they get auto-generated IDs)
+  const unmatchedByName = new Map<string, { applicantId: string; name: string }>();
+  unmatchedRows.forEach((u) => {
+    if (u.name) unmatchedByName.set(u.name.toLowerCase().trim(), { applicantId: u.applicantId, name: u.name });
+  });
+
+  // Iterate through each data row and write the attendance link
+  const dataRows = rawRows.slice(headerRowIndex + 1);
+  dataRows.forEach((rowArray, idx) => {
+    if (!rowArray || rowArray.every((cell) => String(cell).trim() === '')) return;
+
+    const rowIndex = headerRowIndex + 1 + idx;
+    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
+    const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : String(rowArray[0] || rowArray[1] || '').trim();
+    const rawEmail = emailCol >= 0 && rowArray[emailCol] ? String(rowArray[emailCol]).trim() : '';
+
+    // Resolve SAP ID for this row
+    let sapId = '';
+    let studentName = rawName;
+
+    if (rawEmail && sapByEmail.has(rawEmail.toLowerCase())) {
+      sapId = sapByEmail.get(rawEmail.toLowerCase()) || '';
+      studentName = nameByEmail.get(rawEmail.toLowerCase()) || rawName;
+    } else if (rawName && sapByName.has(rawName.toLowerCase())) {
+      sapId = sapByName.get(rawName.toLowerCase()) || '';
+      studentName = nameByName.get(rawName.toLowerCase()) || rawName;
+    } else if (rawId) {
+      // Check if rawId is a known SAP ID
+      const matchedByRawId = masterStudents.find((s) => s.sapId.trim() === rawId);
+      sapId = matchedByRawId ? matchedByRawId.sapId : rawId;
+      studentName = matchedByRawId ? matchedByRawId.name : rawName;
+    } else if (rawName && unmatchedByName.has(rawName.toLowerCase())) {
+      const um = unmatchedByName.get(rawName.toLowerCase())!;
+      sapId = um.applicantId;
+      studentName = um.name;
+    } else {
+      sapId = rawId || `REG-2026-${String(idx + 1).padStart(3, '0')}`;
+    }
+
+    const link = generateCandidateAttendanceLink(roundId, sapId, studentName);
+    const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: newColIndex });
+    worksheet[cellRef] = { t: 's', v: link };
+  });
+
+  // Update the sheet range to include the new column
+  range.e.c = newColIndex;
+  worksheet['!ref'] = XLSX.utils.encode_range(range);
+
+  // Download the modified workbook
+  const fileName = `${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_With_Attendance_Links.xlsx`;
+  XLSX.writeFile(workbook, fileName, { bookType: 'xlsx' });
+}
+
+/**
+ * Preserves the original company-provided Excel sheet exactly as-is and appends
+ * an "Attendance" column at the very end, marking each candidate row as PRESENT or ABSENT
+ * by cross-referencing with the live attendance data.
+ *
+ * This is the final downloadable report — the company's own sheet with attendance results.
+ */
+export function exportOriginalSheetWithAttendanceStatus(
+  originalFileData: ArrayBuffer,
+  roundId: string,
+  companyName: string,
+  roundName: string,
+  roundStudents: RoundStudent[],
+  masterStudents: Student[]
+): void {
+  const workbook = XLSX.read(originalFileData, { type: 'array' });
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+
+  if (!rawRows || rawRows.length === 0) return;
+
+  const { headerRowIndex, idCol, nameCol, emailCol } = detectHeaderRow(rawRows);
+
+  // Find the last column index in the original sheet
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  const newColIndex = range.e.c + 1;
+
+  // Write the "Attendance" header
+  const headerCellRef = XLSX.utils.encode_cell({ r: headerRowIndex, c: newColIndex });
+  worksheet[headerCellRef] = { t: 's', v: 'Attendance' };
+
+  // Build attendance lookup: sapId -> PRESENT/ABSENT
+  const attendanceBySap = new Map<string, 'PRESENT' | 'ABSENT'>();
+  const attendanceByName = new Map<string, 'PRESENT' | 'ABSENT'>();
+  const attendanceByEmail = new Map<string, 'PRESENT' | 'ABSENT'>();
+
+  roundStudents
+    .filter((rs) => rs.roundId === roundId)
+    .forEach((rs) => {
+      const status: 'PRESENT' | 'ABSENT' =
+        rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED'
+          ? 'PRESENT'
+          : 'ABSENT';
+      if (rs.sapId) attendanceBySap.set(rs.sapId.trim(), status);
+      if (rs.studentName) attendanceByName.set(rs.studentName.toLowerCase().trim(), status);
+      if (rs.email) attendanceByEmail.set(rs.email.toLowerCase().trim(), status);
+    });
+
+  // Also build sapId lookup from masterStudents for ID-based matching
+  const masterSapByName = new Map<string, string>();
+  const masterSapByEmail = new Map<string, string>();
+  masterStudents.forEach((s) => {
+    if (s.name) masterSapByName.set(s.name.toLowerCase().trim(), s.sapId);
+    if (s.email) masterSapByEmail.set(s.email.toLowerCase().trim(), s.sapId);
+  });
+
+  // Iterate data rows and write attendance status
+  const dataRows = rawRows.slice(headerRowIndex + 1);
+  dataRows.forEach((rowArray, idx) => {
+    if (!rowArray || rowArray.every((cell) => String(cell).trim() === '')) return;
+
+    const rowIndex = headerRowIndex + 1 + idx;
+    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
+    const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : String(rowArray[0] || rowArray[1] || '').trim();
+    const rawEmail = emailCol >= 0 && rowArray[emailCol] ? String(rowArray[emailCol]).trim() : '';
+
+    // Try to resolve attendance status through multiple matching strategies
+    let status: 'PRESENT' | 'ABSENT' = 'ABSENT';
+
+    // Strategy 1: Direct SAP/ID match
+    if (rawId && attendanceBySap.has(rawId)) {
+      status = attendanceBySap.get(rawId)!;
+    }
+    // Strategy 2: Email → SAP → attendance
+    else if (rawEmail && attendanceByEmail.has(rawEmail.toLowerCase())) {
+      status = attendanceByEmail.get(rawEmail.toLowerCase())!;
+    } else if (rawEmail && masterSapByEmail.has(rawEmail.toLowerCase())) {
+      const resolvedSap = masterSapByEmail.get(rawEmail.toLowerCase())!;
+      if (attendanceBySap.has(resolvedSap)) {
+        status = attendanceBySap.get(resolvedSap)!;
+      }
+    }
+    // Strategy 3: Name → SAP → attendance
+    else if (rawName && attendanceByName.has(rawName.toLowerCase())) {
+      status = attendanceByName.get(rawName.toLowerCase())!;
+    } else if (rawName && masterSapByName.has(rawName.toLowerCase())) {
+      const resolvedSap = masterSapByName.get(rawName.toLowerCase())!;
+      if (attendanceBySap.has(resolvedSap)) {
+        status = attendanceBySap.get(resolvedSap)!;
+      }
+    }
+
+    const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: newColIndex });
+    worksheet[cellRef] = { t: 's', v: status };
+  });
+
+  // Update the sheet range
+  range.e.c = newColIndex;
+  worksheet['!ref'] = XLSX.utils.encode_range(range);
+
+  // Download
+  const fileName = `${companyName.replace(/\s+/g, '_')}_${roundName.replace(/\s+/g, '_')}_Final_Attendance_Report.xlsx`;
+  XLSX.writeFile(workbook, fileName, { bookType: 'xlsx' });
 }

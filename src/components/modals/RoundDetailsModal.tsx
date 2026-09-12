@@ -1,6 +1,6 @@
 import React from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Round } from '../../types';
+import { Round, RoundStudent } from '../../types';
 import {
   MapPin,
   Calendar,
@@ -35,7 +35,24 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
 
   if (!round) return null;
 
-  const currentRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+  const rawRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+  const currentRoundStudents = Array.from(
+    rawRoundStudents.reduce((map, item) => {
+      const key = String(item.sapId).trim();
+      const existing = map.get(key);
+      if (!existing || item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED') {
+        map.set(key, item);
+      }
+      return map;
+    }, new Map<string, RoundStudent>()).values()
+  );
+
+  const presentCount = currentRoundStudents.filter(
+    (rs) => rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED'
+  ).length;
+  const totalStudentsCount = Math.max(currentRoundStudents.length, round.totalShortlisted || 0);
+  const absentCount = Math.max(0, totalStudentsCount - presentCount);
+  const attendancePercentage = totalStudentsCount > 0 ? Math.round((presentCount / totalStudentsCount) * 100) : 0;
 
   // Parse venues list from round.venue string (separated by | or comma)
   const venues = round.venue
@@ -139,7 +156,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Attendance Rate</span>
               <div className="text-xs font-extrabold text-emerald-600 mt-0.5">
-                {round.attendedCount}/{round.totalShortlisted || 0} ({Math.round(((round.attendedCount || 0) / (round.totalShortlisted || 1)) * 100)}%)
+                {presentCount}/{totalStudentsCount} ({attendancePercentage}%)
               </div>
             </div>
           </div>
@@ -221,7 +238,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                 </h4>
               </div>
               <span className="text-[11px] font-extrabold text-slate-600">
-                Present: {round.attendedCount} | Absent: {round.absentCount}
+                Present: {presentCount} | Absent: {absentCount}
               </span>
             </div>
 

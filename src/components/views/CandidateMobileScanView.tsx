@@ -4,6 +4,8 @@ import { Check, Camera } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import jsQR from 'jsqr';
 
+import { validateQRToken } from '../../utils/qrUtils';
+
 export function parseScanUrlParams() {
   if (typeof window === 'undefined') return { roundId: '', sapId: '', candidateName: '', token: '' };
 
@@ -20,7 +22,7 @@ export function parseScanUrlParams() {
 
   return {
     roundId,
-    sapId,
+    sapId: String(sapId).trim(),
     candidateName: candidateName ? decodeURIComponent(candidateName) : '',
     token,
   };
@@ -47,22 +49,23 @@ export const CandidateMobileScanView: React.FC = () => {
     };
   }, []);
 
-  const targetRound = rounds.find((r) => r.id === params.roundId) || rounds[0];
+  const cleanSap = String(params.sapId || '').trim();
 
   // Lookup candidate name dynamically by SAP ID or URL parameter
-  const matchedStudent = students.find((s) => s.sapId === params.sapId);
+  const matchedStudent = students.find((s) => String(s.sapId).trim() === cleanSap);
   const matchedRoundStudent = roundStudents.find(
-    (rs) => rs.sapId === params.sapId && (rs.roundId === params.roundId || !params.roundId)
+    (rs) => String(rs.sapId).trim() === cleanSap && (rs.roundId === params.roundId || !params.roundId)
   );
 
   const displayName =
     params.candidateName ||
     matchedRoundStudent?.studentName ||
     matchedStudent?.name ||
-    (params.sapId ? `Candidate (${params.sapId})` : 'Student Candidate');
+    (cleanSap ? `Candidate (${cleanSap})` : 'Student Candidate');
 
   const isAlreadyPresentInContext =
-    Boolean(params.sapId) &&
+    Boolean(cleanSap) &&
+    Boolean(matchedRoundStudent) &&
     (matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
       matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED');
 
@@ -123,15 +126,16 @@ export const CandidateMobileScanView: React.FC = () => {
 
           if (code && code.data) {
             const scannedText = code.data;
+            const tokenCheck = validateQRToken(scannedText);
 
             const isValidQR =
-              scannedText.includes('UPES-SEC') ||
-              scannedText.includes(params.roundId) ||
-              scannedText.length > 6;
+              tokenCheck.valid ||
+              scannedText.includes('UPES') ||
+              (Boolean(params.roundId) && scannedText.includes(params.roundId));
 
-            if (isValidQR) {
+            if (isValidQR && cleanSap) {
               isScanningRef.current = false;
-              markAttendance(params.roundId || 'rnd-1', params.sapId || '500123174', 'REAL_CAMERA_QR_SCAN', displayName);
+              markAttendance(params.roundId || 'rnd-1', cleanSap, 'REAL_CAMERA_QR_SCAN', displayName);
               setMarked(true);
               confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
 
@@ -157,7 +161,7 @@ export const CandidateMobileScanView: React.FC = () => {
         currentStream.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [isPresent, params.roundId, params.sapId, displayName, markAttendance]);
+  }, [isPresent, params.roundId, cleanSap, displayName, markAttendance]);
 
   return (
     <div className="min-h-screen w-full bg-[#EEF2F6] flex flex-col items-center justify-center p-4 font-sans select-none relative overflow-hidden">

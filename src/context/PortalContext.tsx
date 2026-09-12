@@ -80,6 +80,10 @@ interface PortalContextType {
   acceptOffer: (offerId: string) => void;
   regenerateQR: (roundId: string) => void;
   toggleGeoFence: (roundId: string) => void;
+
+  // Original Excel buffer storage (per round) for preserving company sheet format
+  storeOriginalExcel: (roundId: string, buffer: ArrayBuffer) => void;
+  getOriginalExcel: (roundId: string) => ArrayBuffer | undefined;
 }
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
@@ -121,6 +125,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     '4 rounds currently need SPR duty allocation.',
   ]);
 
+  // Store original Excel file buffers per round (roundId -> ArrayBuffer)
+  // This allows us to re-read the original company sheet and append columns at the end
+  const [originalExcelBuffers, setOriginalExcelBuffers] = useState<Map<string, ArrayBuffer>>(new Map());
+
+  const storeOriginalExcel = (roundId: string, buffer: ArrayBuffer) => {
+    setOriginalExcelBuffers((prev) => {
+      const next = new Map(prev);
+      next.set(roundId, buffer);
+      return next;
+    });
+  };
+
+  const getOriginalExcel = (roundId: string): ArrayBuffer | undefined => {
+    return originalExcelBuffers.get(roundId);
+  };
+
   // Sync to local storage for persistence & live sync across browser tabs
   useEffect(() => {
     localStorage.setItem('upes_students', JSON.stringify(students));
@@ -142,36 +162,71 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
   }, [roundStudents]);
 
+  // Helper to trigger real-time live sync across state, localStorage, same-window events & BroadcastChannel
+  const syncLiveAttendance = (newRoundStudents: RoundStudent[], newRounds: Round[]) => {
+    setRoundStudents(newRoundStudents);
+    setRounds(newRounds);
+    try {
+      localStorage.setItem('upes_round_students', JSON.stringify(newRoundStudents));
+      localStorage.setItem('upes_rounds', JSON.stringify(newRounds));
+    } catch {}
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        const bc = new BroadcastChannel('upes_attendance_live_sync');
+        bc.postMessage({ type: 'ATTENDANCE_LIVE_UPDATE' });
+        bc.close();
+      } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('upes_attendance_updated'));
+    }
+  };
+
   // Live real-time cross-tab and cross-window sync
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'upes_round_students' && e.newValue) {
+    const reloadFromStorage = () => {
+      const savedRs = localStorage.getItem('upes_round_students');
+      if (savedRs) {
         try {
-          setRoundStudents(JSON.parse(e.newValue));
+          setRoundStudents(JSON.parse(savedRs));
         } catch {}
       }
-      if (e.key === 'upes_rounds' && e.newValue) {
+
+      const savedR = localStorage.getItem('upes_rounds');
+      if (savedR) {
         try {
-          setRounds(JSON.parse(e.newValue));
+          setRounds(JSON.parse(savedR));
         } catch {}
       }
     };
 
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'upes_round_students' || e.key === 'upes_rounds') {
+        reloadFromStorage();
+      }
+    };
+
     window.addEventListener('storage', handleStorage);
+    window.addEventListener('upes_attendance_updated', reloadFromStorage);
 
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
       bc = new BroadcastChannel('upes_attendance_live_sync');
       bc.onmessage = (evt) => {
         if (evt.data?.type === 'ATTENDANCE_LIVE_UPDATE') {
-          if (evt.data.roundStudents) setRoundStudents(evt.data.roundStudents);
-          if (evt.data.rounds) setRounds(evt.data.rounds);
+          reloadFromStorage();
         }
       };
     }
 
+    const pollInterval = setInterval(reloadFromStorage, 1000);
+
     return () => {
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('upes_attendance_updated', reloadFromStorage);
+      clearInterval(pollInterval);
       if (bc) bc.close();
     };
   }, []);
@@ -383,7 +438,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
       studentId: st.id,
-      sapId: st.sapId,
+      sapId: String(st.sapId).trim(),
       studentName: st.name,
       email: st.email,
       phone: st.phone,
@@ -393,7 +448,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
-    setRoundStudents((prev) => [...newRoundStudents, ...prev]);
+    const updatedRoundStudents = [...newRoundStudents, ...roundStudents];
+    const updatedRounds = [newRound, ...rounds];
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
     addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates and ${allocatedSprIds.length} allocated SPRs.`);
   };
 
@@ -404,7 +463,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
       studentId: st.id,
-      sapId: st.sapId,
+      sapId: String(st.sapId).trim(),
       studentName: st.name,
       email: st.email,
       phone: st.phone,
@@ -414,21 +473,21 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
-    setRoundStudents((prev) => [
+    const updatedRoundStudents = [
       ...newRoundStudents,
-      ...prev.filter((rs) => rs.roundId !== roundId),
-    ]);
+      ...roundStudents.filter((rs) => rs.roundId !== roundId),
+    ];
 
-    setRounds((prev) =>
-      prev.map((r) =>
-        r.id === roundId
-          ? {
-              ...r,
-              totalShortlisted: shortlistedStudents.length,
-            }
-          : r
-      )
+    const updatedRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            totalShortlisted: shortlistedStudents.length,
+          }
+        : r
     );
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
     addAuditLog(
       'UPLOAD_SHORTLIST',
@@ -437,42 +496,50 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN', candidateName?: string) => {
-    const student = students.find((s) => s.sapId === sapId);
-    const resolvedName = candidateName || student?.name || `Candidate ${sapId}`;
+    const cleanSap = String(sapId || '').trim();
+    if (!cleanSap) {
+      return { success: false, message: 'Invalid candidate SAP ID.' };
+    }
 
-    const roundStudentIndex = roundStudents.findIndex(
-      (rs) => rs.sapId === sapId && (rs.roundId === roundId || !roundId)
-    );
-
+    const student = students.find((s) => String(s.sapId).trim() === cleanSap);
+    const resolvedName = candidateName || student?.name || `Candidate (${cleanSap})`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    if (roundStudentIndex !== -1) {
-      const currentRecord = roundStudents[roundStudentIndex];
-      if (currentRecord.attendanceStatus === 'PRESENT' || currentRecord.attendanceStatus === 'MANUALLY_MARKED') {
-        return { success: true, message: `Attendance already marked for ${currentRecord.studentName} at ${currentRecord.attendanceTime || 'earlier'}.` };
-      }
+    // Match exact round + sapId, or any sapId match in roundStudents
+    const exactIndex = roundStudents.findIndex(
+      (rs) => String(rs.sapId).trim() === cleanSap && (rs.roundId === roundId || !roundId)
+    );
+    const anyIndex = exactIndex !== -1 ? exactIndex : roundStudents.findIndex((rs) => String(rs.sapId).trim() === cleanSap);
+    const targetIndex = exactIndex !== -1 ? exactIndex : anyIndex;
 
-      setRoundStudents((prev) =>
-        prev.map((rs, idx) =>
-          idx === roundStudentIndex
-            ? {
-                ...rs,
-                attendanceStatus: 'PRESENT',
-                attendanceTime: nowTime,
-                markedBy: method,
-              }
-            : rs
-        )
-      );
+    let targetRoundId = roundId;
+    let updatedRoundStudents: RoundStudent[] = [];
+
+    if (targetIndex !== -1) {
+      targetRoundId = roundStudents[targetIndex].roundId || roundId || rounds[0]?.id || 'rnd-1';
+
+      updatedRoundStudents = roundStudents.map((rs) => {
+        const matchesSap = String(rs.sapId).trim() === cleanSap;
+        const matchesRound = !roundId || rs.roundId === targetRoundId || rs.roundId === roundId;
+        if (matchesSap && matchesRound) {
+          return {
+            ...rs,
+            attendanceStatus: 'PRESENT' as const,
+            attendanceTime: nowTime,
+            markedBy: method,
+            studentName: resolvedName || rs.studentName,
+          };
+        }
+        return rs;
+      });
     } else {
-      // Dynamic fallback record so any valid candidate can mark attendance seamlessly
-      const targetRoundId = roundId || rounds[0]?.id || 'rnd-1';
+      targetRoundId = roundId || rounds[0]?.id || 'rnd-1';
       const newRecord: RoundStudent = {
         roundId: targetRoundId,
-        studentId: student?.id || `st-${sapId}`,
-        sapId,
+        studentId: student?.id || `st-${cleanSap}`,
+        sapId: cleanSap,
         studentName: resolvedName,
-        email: student?.email || `${sapId}@stu.upes.ac.in`,
+        email: student?.email || `${cleanSap}@stu.upes.ac.in`,
         phone: student?.phone || 'N/A',
         branch: student?.branch || 'B.Tech CSE',
         shortlistStatus: 'SHORTLISTED',
@@ -481,51 +548,47 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         markedBy: method,
         panelNumber: 'Panel 1',
       };
-
-      setRoundStudents((prev) => [newRecord, ...prev]);
+      updatedRoundStudents = [newRecord, ...roundStudents];
     }
 
-    const targetId = roundId || rounds[0]?.id;
-    if (targetId) {
-      setRounds((prev) =>
-        prev.map((r) =>
-          r.id === targetId
-            ? { ...r, attendedCount: (r.attendedCount || 0) + 1 }
-            : r
-        )
-      );
-    }
+    const updatedRounds = rounds.map((r) => {
+      const presentCount = updatedRoundStudents.filter(
+        (rs) => rs.roundId === r.id && (rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED')
+      ).length;
+      return { ...r, attendedCount: presentCount };
+    });
 
-    // Dispatch broadcast event for instantaneous cross-tab live portal update
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const bc = new BroadcastChannel('upes_attendance_live_sync');
-        bc.postMessage({ type: 'ATTENDANCE_LIVE_UPDATE' });
-        bc.close();
-      } catch {}
-    }
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
-    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${sapId}) via ${method}.`);
-    return { success: true, message: `Attendance verified successfully for ${resolvedName} (${sapId})!` };
+    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${cleanSap}) via ${method}.`);
+    return { success: true, message: `Attendance verified successfully for ${resolvedName} (${cleanSap})!` };
   };
 
   const manualAttendanceOverride = (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => {
+    const cleanSap = String(sapId || '').trim();
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    setRoundStudents((prev) =>
-      prev.map((rs) =>
-        rs.roundId === roundId && rs.sapId === sapId
-          ? {
-              ...rs,
-              attendanceStatus: status === 'PRESENT' ? 'MANUALLY_MARKED' : 'ABSENT',
-              attendanceTime: status === 'PRESENT' ? nowTime : undefined,
-              markedBy: `MANUAL_OVERRIDE: ${reason}`,
-            }
-          : rs
-      )
+    const updatedRoundStudents = roundStudents.map((rs) =>
+      rs.roundId === roundId && String(rs.sapId).trim() === cleanSap
+        ? {
+            ...rs,
+            attendanceStatus: status === 'PRESENT' ? ('MANUALLY_MARKED' as const) : ('ABSENT' as const),
+            attendanceTime: status === 'PRESENT' ? nowTime : undefined,
+            markedBy: `MANUAL_OVERRIDE: ${reason}`,
+          }
+        : rs
     );
 
-    addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${sapId}. Reason: ${reason}`);
+    const updatedRounds = rounds.map((r) => {
+      const presentCount = updatedRoundStudents.filter(
+        (rs) => rs.roundId === r.id && (rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED')
+      ).length;
+      return { ...r, attendedCount: presentCount };
+    });
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
+    addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${cleanSap}. Reason: ${reason}`);
   };
 
   const triggerSprAllocation = (roundId: string, countNeeded: number) => {
@@ -731,6 +794,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         acceptOffer,
         regenerateQR,
         toggleGeoFence,
+        storeOriginalExcel,
+        getOriginalExcel,
       }}
     >
       {children}

@@ -16,6 +16,14 @@ export const RoundsView: React.FC = () => {
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
 
+  const activeRoundDetails = selectedRoundForDetails
+    ? rounds.find((r) => r.id === selectedRoundForDetails.id) || selectedRoundForDetails
+    : null;
+
+  const activeRoundQR = selectedRoundForQR
+    ? rounds.find((r) => r.id === selectedRoundForQR.id) || selectedRoundForQR
+    : null;
+
   // New Round Form state
   const [companyId, setCompanyId] = useState(companies[0]?.id || 'comp-1');
   const [roundName, setRoundName] = useState('');
@@ -168,10 +176,14 @@ export const RoundsView: React.FC = () => {
       {/* List of Round Cards */}
       <div className="space-y-4">
         {filteredRounds.map((round) => {
-          const currentStudents = roundStudents.filter((rs) => rs.roundId === round.id);
           const isLive = round.status === 'IN_PROGRESS';
           const isCompleted = round.status === 'COMPLETED';
-          const attendedRatio = round.attendedCount / (round.totalShortlisted || 1);
+          const currentStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+          const presentCount = currentStudents.filter(
+            (rs) => rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED'
+          ).length;
+          const totalStudentsCount = Math.max(currentStudents.length, round.totalShortlisted || 0);
+          const attendedRatio = totalStudentsCount > 0 ? presentCount / totalStudentsCount : 0;
 
           const accentColor = isLive
             ? 'bg-blue-600'
@@ -235,7 +247,7 @@ export const RoundsView: React.FC = () => {
               <div className="space-y-1.5 min-w-[140px]">
                 <span className="text-[11px] font-semibold text-slate-400 block">Attendance</span>
                 <div className="text-sm font-extrabold text-slate-900">
-                  {round.attendedCount}/{round.totalShortlisted}
+                  {Math.max(presentCount, round.attendedCount || 0)}/{totalStudentsCount}
                 </div>
                 <div className="h-1.5 w-28 bg-slate-100 rounded-full overflow-hidden">
                   <div
@@ -474,7 +486,7 @@ export const RoundsView: React.FC = () => {
 
       {/* Round Details & SPR Allocation Modal */}
       <RoundDetailsModal
-        round={selectedRoundForDetails}
+        round={activeRoundDetails}
         onClose={() => setSelectedRoundForDetails(null)}
         onOpenQRModal={(r) => setSelectedRoundForQR(r)}
         onOpenUploadModal={(r) => {
@@ -484,7 +496,7 @@ export const RoundsView: React.FC = () => {
       />
 
       {/* QR Control Modal */}
-      <RoundQRControlModal round={selectedRoundForQR} onClose={() => setSelectedRoundForQR(null)} />
+      <RoundQRControlModal round={activeRoundQR} onClose={() => setSelectedRoundForQR(null)} />
 
       {/* Excel Upload Modal */}
       <ExcelUploadModal

@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet } from 'lucide-react';
+import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download } from 'lucide-react';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { QRScannerModal } from '../modals/QRScannerModal';
-import { Round, Student } from '../../types';
-import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink } from '../../utils/excelUtils';
+import { Round, RoundStudent, Student } from '../../types';
+import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink, exportOriginalSheetWithAttendanceStatus } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
-  const { rounds, roundStudents, manualAttendanceOverride, createRound, uploadShortlistForRound } = usePortal();
+  const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, getOriginalExcel } = usePortal();
   const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[1]?.id || rounds[0]?.id || '');
   const [panelFilter, setPanelFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -25,7 +25,17 @@ export const AttendanceView: React.FC = () => {
   const [overrideStatus, setOverrideStatus] = useState<'PRESENT' | 'ABSENT'>('PRESENT');
 
   const selectedRound = rounds.find((r) => r.id === selectedRoundId);
-  const currentRoundStudents = roundStudents.filter((rs) => rs.roundId === selectedRoundId);
+  const rawRoundStudents = roundStudents.filter((rs) => rs.roundId === selectedRoundId);
+  const currentRoundStudents = Array.from(
+    rawRoundStudents.reduce((map, item) => {
+      const key = String(item.sapId).trim();
+      const existing = map.get(key);
+      if (!existing || item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED') {
+        map.set(key, item);
+      }
+      return map;
+    }, new Map<string, RoundStudent>()).values()
+  );
 
   const filteredStudents = currentRoundStudents.filter((st) => {
     const matchesSearch =
@@ -179,7 +189,31 @@ export const AttendanceView: React.FC = () => {
 
           {/* Download Excel / CSV File Action Buttons */}
           {selectedRound && (
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+              {/* Download Final Attendance Report — uses original company sheet with Attendance column appended */}
+              <button
+                onClick={() => {
+                  const buffer = getOriginalExcel(selectedRound.id);
+                  if (buffer) {
+                    exportOriginalSheetWithAttendanceStatus(
+                      buffer,
+                      selectedRound.id,
+                      selectedRound.companyName,
+                      selectedRound.name,
+                      roundStudents,
+                      students
+                    );
+                  } else {
+                    // Fallback: use the standard annotated export if no original buffer stored
+                    exportAnnotatedAttendanceExcel(selectedRound.companyName, selectedRound.name, selectedRound.id, currentRoundStudents, 'xlsx');
+                  }
+                }}
+                className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-extrabold px-3.5 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+              >
+                <Download className="w-4 h-4 text-amber-400" />
+                <span>Download Final Attendance Report</span>
+              </button>
+
               <button
                 onClick={() => exportAnnotatedAttendanceExcel(selectedRound.companyName, selectedRound.name, selectedRound.id, currentRoundStudents, 'xlsx')}
                 className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
