@@ -8,28 +8,16 @@ import { Student, Company, Drive, Round, RoundStudent, SPR, SPRCycle, SPRDutyAss
 
 export const initialUsers: PortalUser[] = [
   {
-    id: 'usr-master-admin',
+    id: 'usr-director-manash',
     username: 'Manash.29481@stu.upes.ac.in',
-    name: 'Manash (Master Admin)',
+    name: 'Manash (Director)',
     email: 'Manash.29481@stu.upes.ac.in',
-    role: 'MASTER_ADMIN',
-    password: 'Pass@123',
-    status: 'ACTIVE',
-    department: 'Directorate of Career Services & Placement Cell',
-    createdAt: '2026-09-01',
-    lastLogin: '2026-09-13 00:20',
-  },
-  {
-    id: 'usr-admin-alias',
-    username: 'admin',
-    name: 'Master Admin',
-    email: 'Manash.29481@stu.upes.ac.in',
-    role: 'MASTER_ADMIN',
+    role: 'DIRECTOR',
     password: 'Pass@123',
     status: 'ACTIVE',
     department: 'Directorate of Career Services',
     createdAt: '2026-09-01',
-    lastLogin: '2026-09-13 00:20',
+    lastLogin: '2026-09-13 00:55',
   },
 ];
 

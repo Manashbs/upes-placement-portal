@@ -33,28 +33,23 @@ export const TopHeader: React.FC = () => {
     return name.slice(0, 2).toUpperCase();
   };
 
-  const isMasterAdmin = currentUser?.role === 'MASTER_ADMIN';
+  const isMasterAdmin = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
 
   const getProfileName = () => {
-    switch (currentRole) {
-      case 'MASTER_ADMIN': return { name: 'Manash', title: 'Master Administrator', initials: 'MA' };
-      case 'PLACEMENT_OFFICER': return { name: 'Rhea Kapoor', title: 'Placement cell', initials: 'RK' };
-      case 'SPR': return { name: 'Tanya Kapoor', title: 'SPR Lead (CSE)', initials: 'TK' };
-      case 'STUDENT': return { name: 'Rahul Sharma', title: 'SAP ID: 59001234', initials: 'RS' };
-      case 'RECRUITER': return { name: 'Sarah Jenkins', title: 'Microsoft HR', initials: 'SJ' };
-      case 'SUPER_ADMIN': return { name: 'Admin Control', title: 'Super Administrator', initials: 'SA' };
-      default: return { name: currentUser?.name || 'User', title: 'Placement Portal', initials: 'UP' };
+    if (currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN') {
+      return { name: currentUser.name || 'Manash (Director)', title: 'Director (Master Admin)', initials: getInitials(currentUser.name || 'Manash') };
     }
+    if (currentUser?.role === 'CSO' || currentUser?.role === 'CAREER_SERVICE_OFFICER' || currentUser?.role === 'PLACEMENT_OFFICER') {
+      return { name: currentUser.name || 'Career Service Officer', title: 'Career Service Officer', initials: getInitials(currentUser.name || 'CSO') };
+    }
+    return { name: currentUser?.name || 'User', title: 'Placement Portal', initials: getInitials(currentUser?.name || 'UP') };
   };
 
   const profile = getProfileName();
 
   const roleOptions: { id: UserRole; label: string; icon: any; defaultTab: string }[] = [
-    { id: 'PLACEMENT_OFFICER', label: 'Placement Officer (PO)', icon: ShieldCheck, defaultTab: 'spr-rotation' },
-    { id: 'SPR', label: 'Student Rep (SPR)', icon: UserCheck, defaultTab: 'spr-dashboard' },
-    { id: 'STUDENT', label: 'Student', icon: GraduationCap, defaultTab: 'student-dashboard' },
-    { id: 'RECRUITER', label: 'Recruiter (Read-Only)', icon: Building, defaultTab: 'companies' },
-    { id: 'SUPER_ADMIN', label: 'Super Admin', icon: Lock, defaultTab: 'settings' },
+    { id: 'DIRECTOR', label: 'Director (Master Admin)', icon: ShieldCheck, defaultTab: 'command-center' },
+    { id: 'CSO', label: 'Career Service Officer (CSO)', icon: UserCheck, defaultTab: 'attendance' },
   ];
 
   const handleSelectRole = (roleId: UserRole, defaultTab: string) => {

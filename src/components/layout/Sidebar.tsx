@@ -18,7 +18,7 @@ import { usePortal } from '../../context/PortalContext';
 export const Sidebar: React.FC = () => {
   const { activeTab, setActiveTab, currentRole, currentUser, logout } = usePortal();
 
-  const isMasterAdmin = currentUser?.role === 'MASTER_ADMIN';
+  const isMasterAdmin = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
 
   const operationsNav = [
     { id: 'command-center', label: 'Command center', icon: LayoutDashboard },

@@ -1,4 +1,4 @@
-export type UserRole = 'MASTER_ADMIN' | 'PLACEMENT_OFFICER' | 'SPR' | 'STUDENT' | 'RECRUITER' | 'SUPER_ADMIN' | 'VIEWER';
+export type UserRole = 'DIRECTOR' | 'CSO' | 'MASTER_ADMIN' | 'CAREER_SERVICE_OFFICER' | 'PLACEMENT_OFFICER' | 'SPR' | 'STUDENT' | 'RECRUITER' | 'SUPER_ADMIN' | 'VIEWER';
 
 export interface PortalUser {
   id: string;

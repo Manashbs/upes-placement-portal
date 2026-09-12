@@ -32,7 +32,7 @@ export const SettingsView: React.FC = () => {
     resetPortalData,
   } = usePortal();
 
-  const isMasterAdmin = currentUser?.role === 'MASTER_ADMIN';
+  const isMasterAdmin = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
 
   // Filters & State
   const [searchQuery, setSearchQuery] = useState('');
@@ -44,17 +44,17 @@ export const SettingsView: React.FC = () => {
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
   const [successToast, setSuccessToast] = useState<string | null>(null);
 
-  // Form State for New User
+  // Form State for New User (Default to CSO)
   const [newName, setNewName] = useState('');
   const [newUsername, setNewUsername] = useState('');
   const [newEmail, setNewEmail] = useState('');
-  const [newRole, setNewRole] = useState<UserRole>('PLACEMENT_OFFICER');
+  const [newRole, setNewRole] = useState<UserRole>('CSO');
   const [newPassword, setNewPassword] = useState('Pass@123');
   const [newDepartment, setNewDepartment] = useState('Directorate of Career Services');
 
   // Form State for Edit User
   const [editName, setEditName] = useState('');
-  const [editRole, setEditRole] = useState<UserRole>('PLACEMENT_OFFICER');
+  const [editRole, setEditRole] = useState<UserRole>('CSO');
   const [editDepartment, setEditDepartment] = useState('');
   const [editStatus, setEditStatus] = useState<'ACTIVE' | 'DISABLED'>('ACTIVE');
   const [editPassword, setEditPassword] = useState('');
@@ -86,14 +86,17 @@ export const SettingsView: React.FC = () => {
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.email.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesRole = roleFilter === 'ALL' || u.role === roleFilter;
+    const matchesRole =
+      roleFilter === 'ALL' ||
+      (roleFilter === 'DIRECTOR' && (u.role === 'DIRECTOR' || u.role === 'MASTER_ADMIN')) ||
+      (roleFilter === 'CSO' && (u.role === 'CSO' || u.role === 'CAREER_SERVICE_OFFICER' || u.role === 'PLACEMENT_OFFICER'));
     return matchesSearch && matchesRole;
   });
 
   const handleOpenEdit = (user: PortalUser) => {
     setEditingUser(user);
     setEditName(user.name);
-    setEditRole(user.role);
+    setEditRole(user.role === 'DIRECTOR' || user.role === 'MASTER_ADMIN' ? 'DIRECTOR' : 'CSO');
     setEditDepartment(user.department || '');
     setEditStatus(user.status);
     setEditPassword('');
@@ -126,7 +129,7 @@ export const SettingsView: React.FC = () => {
     setNewUsername('');
     setNewEmail('');
     setNewPassword('Pass@123');
-    triggerToast(`User account for ${newName} created successfully.`);
+    triggerToast(`Career Service Officer account for ${newName} created successfully.`);
   };
 
   const handleUpdateUserSubmit = (e: React.FormEvent) => {
@@ -149,11 +152,11 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleDeleteUser = (id: string, name: string) => {
-    if (id === currentUser?.id || id === 'usr-master-admin') {
-      alert('Cannot delete the primary Master Admin account.');
+    if (id === currentUser?.id || id === 'usr-director-manash' || name.toLowerCase().includes('manash')) {
+      alert('Cannot delete the primary Director account.');
       return;
     }
-    if (confirm(`Are you sure you want to delete user account "${name}"? This action cannot be undone.`)) {
+    if (confirm(`Are you sure you want to delete account "${name}"? This action cannot be undone.`)) {
       deleteUser(id);
       triggerToast(`Account for ${name} removed.`);
     }
@@ -167,41 +170,21 @@ export const SettingsView: React.FC = () => {
 
   const getRoleBadge = (role: UserRole) => {
     switch (role) {
+      case 'DIRECTOR':
       case 'MASTER_ADMIN':
         return (
           <span className="inline-flex items-center space-x-1 bg-amber-100 text-amber-900 text-[10px] font-black px-2.5 py-1 rounded-full border border-amber-300">
             <Sparkles className="w-3 h-3 text-amber-600" />
-            <span>MASTER ADMIN</span>
+            <span>DIRECTOR</span>
           </span>
         );
+      case 'CSO':
+      case 'CAREER_SERVICE_OFFICER':
       case 'PLACEMENT_OFFICER':
-        return (
-          <span className="inline-flex items-center space-x-1 bg-blue-100 text-blue-900 text-[10px] font-bold px-2.5 py-1 rounded-full border border-blue-200">
-            <span>PLACEMENT OFFICER</span>
-          </span>
-        );
-      case 'SPR':
-        return (
-          <span className="inline-flex items-center space-x-1 bg-emerald-100 text-emerald-900 text-[10px] font-bold px-2.5 py-1 rounded-full border border-emerald-200">
-            <span>SPR REP</span>
-          </span>
-        );
-      case 'RECRUITER':
-        return (
-          <span className="inline-flex items-center space-x-1 bg-purple-100 text-purple-900 text-[10px] font-bold px-2.5 py-1 rounded-full border border-purple-200">
-            <span>RECRUITER</span>
-          </span>
-        );
-      case 'STUDENT':
-        return (
-          <span className="inline-flex items-center space-x-1 bg-slate-100 text-slate-800 text-[10px] font-bold px-2.5 py-1 rounded-full border border-slate-200">
-            <span>STUDENT</span>
-          </span>
-        );
       default:
         return (
-          <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2.5 py-1 rounded-full">
-            {role}
+          <span className="inline-flex items-center space-x-1 bg-blue-100 text-blue-900 text-[10px] font-bold px-2.5 py-1 rounded-full border border-blue-200">
+            <span>CAREER SERVICE OFFICER</span>
           </span>
         );
     }
@@ -221,13 +204,13 @@ export const SettingsView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase mb-1">
-            MASTER ADMIN CONSOLE
+            DIRECTOR CONSOLE
           </div>
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">
-            Portal Settings & User Governance
+            Portal Settings & Officer Governance
           </h2>
           <p className="text-sm font-medium text-slate-500 max-w-2xl">
-            Authorize team members, manage account credentials, configure campus placement rules, and oversee production data.
+            The Director (Master Admin) can create and manage Career Service Officers (CSOs) who run placement drives.
           </p>
         </div>
 
@@ -236,40 +219,32 @@ export const SettingsView: React.FC = () => {
           className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-black px-5 py-3 rounded-xl shadow-lg transition-all cursor-pointer"
         >
           <UserPlus className="w-4 h-4 text-amber-400" />
-          <span>Create New User</span>
+          <span>Create Career Service Officer</span>
         </button>
       </div>
 
-      {/* Summary KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Summary KPI Cards — Director & CSOs only */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
           <div className="text-[11px] font-bold text-slate-400 uppercase">Total Accounts</div>
           <div className="text-2xl font-black text-slate-900 mt-1">{users.length}</div>
-          <div className="text-[10px] text-emerald-600 font-bold mt-1">100% Operational</div>
+          <div className="text-[10px] text-emerald-600 font-bold mt-1">Operational</div>
         </div>
 
         <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-400 uppercase">Master Admins</div>
+          <div className="text-[11px] font-bold text-slate-400 uppercase">Director (Master Admin)</div>
           <div className="text-2xl font-black text-amber-600 mt-1">
-            {users.filter((u) => u.role === 'MASTER_ADMIN').length}
+            {users.filter((u) => u.role === 'DIRECTOR' || u.role === 'MASTER_ADMIN').length}
           </div>
-          <div className="text-[10px] text-slate-400 mt-1">Full Authority</div>
+          <div className="text-[10px] text-slate-400 mt-1">Full Governance Authority</div>
         </div>
 
         <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-400 uppercase">Placement Officers</div>
+          <div className="text-[11px] font-bold text-slate-400 uppercase">Career Service Officers (CSO)</div>
           <div className="text-2xl font-black text-blue-600 mt-1">
-            {users.filter((u) => u.role === 'PLACEMENT_OFFICER').length}
+            {users.filter((u) => u.role === 'CSO' || u.role === 'CAREER_SERVICE_OFFICER' || u.role === 'PLACEMENT_OFFICER').length}
           </div>
-          <div className="text-[10px] text-slate-400 mt-1">Drive Managers</div>
-        </div>
-
-        <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm">
-          <div className="text-[11px] font-bold text-slate-400 uppercase">SPR Representatives</div>
-          <div className="text-2xl font-black text-emerald-600 mt-1">
-            {users.filter((u) => u.role === 'SPR').length}
-          </div>
-          <div className="text-[10px] text-slate-400 mt-1">Ground Team</div>
+          <div className="text-[10px] text-slate-400 mt-1">Placement Operations</div>
         </div>
       </div>
 
@@ -279,7 +254,7 @@ export const SettingsView: React.FC = () => {
           <div>
             <h3 className="text-lg font-extrabold text-slate-900">Registered Portal Users</h3>
             <p className="text-xs text-slate-400">
-              Only the Master Admin can provision, edit credentials, or deactivate accounts.
+              Only the Director can provision, edit credentials, or deactivate accounts.
             </p>
           </div>
 
@@ -303,11 +278,8 @@ export const SettingsView: React.FC = () => {
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-amber-500"
             >
               <option value="ALL">All Roles</option>
-              <option value="MASTER_ADMIN">Master Admin</option>
-              <option value="PLACEMENT_OFFICER">Placement Officer</option>
-              <option value="SPR">SPR</option>
-              <option value="RECRUITER">Recruiter</option>
-              <option value="STUDENT">Student</option>
+              <option value="DIRECTOR">Director (Master Admin)</option>
+              <option value="CSO">Career Service Officer (CSO)</option>
             </select>
           </div>
         </div>
@@ -477,11 +449,8 @@ export const SettingsView: React.FC = () => {
                     onChange={(e) => setNewRole(e.target.value as UserRole)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold focus:outline-none focus:border-amber-500"
                   >
-                    <option value="MASTER_ADMIN">Master Admin (Full Access)</option>
-                    <option value="PLACEMENT_OFFICER">Placement Officer (PO)</option>
-                    <option value="SPR">SPR Representative</option>
-                    <option value="RECRUITER">Recruiter Partner (Read-Only)</option>
-                    <option value="STUDENT">Student Candidate</option>
+                    <option value="CSO">Career Service Officer (CSO)</option>
+                    <option value="DIRECTOR">Director (Master Admin)</option>
                   </select>
                 </div>
               </div>
@@ -566,11 +535,8 @@ export const SettingsView: React.FC = () => {
                     onChange={(e) => setEditRole(e.target.value as UserRole)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold focus:outline-none focus:border-amber-500"
                   >
-                    <option value="MASTER_ADMIN">Master Admin</option>
-                    <option value="PLACEMENT_OFFICER">Placement Officer</option>
-                    <option value="SPR">SPR</option>
-                    <option value="RECRUITER">Recruiter</option>
-                    <option value="STUDENT">Student</option>
+                    <option value="CSO">Career Service Officer (CSO)</option>
+                    <option value="DIRECTOR">Director (Master Admin)</option>
                   </select>
                 </div>
 

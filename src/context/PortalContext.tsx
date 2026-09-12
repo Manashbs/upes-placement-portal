@@ -108,21 +108,28 @@ const PortalContext = createContext<PortalContextType | undefined>(undefined);
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<PortalUser[]>(() => {
     try {
-      const saved = localStorage.getItem('upes_portal_users');
-      if (saved) {
-        const parsed: PortalUser[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Merge initial default accounts with saved accounts
-          const merged = [...parsed];
-          initialUsers.forEach((iu) => {
-            const exists = merged.some(
-              (m) => m.username.toLowerCase() === iu.username.toLowerCase() || (m.email && iu.email && m.email.toLowerCase() === iu.email.toLowerCase())
-            );
-            if (!exists) {
-              merged.push(iu);
+      const cleanVer = localStorage.getItem('upes_clean_version');
+      if (cleanVer === 'prod_v7_only_director_manash') {
+        const saved = localStorage.getItem('upes_portal_users');
+        if (saved) {
+          const parsed: PortalUser[] = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
+            const filtered = parsed.filter((u) => {
+              const uname = (u.username || '').toLowerCase();
+              const uemail = (u.email || '').toLowerCase();
+              return (
+                !blacklist.includes(uname) &&
+                !blacklist.includes(uemail) &&
+                (u.role === 'DIRECTOR' || u.role === 'CSO' || u.role === 'CAREER_SERVICE_OFFICER' || u.role === 'MASTER_ADMIN')
+              );
+            });
+            const hasDirector = filtered.some((u) => u.username.toLowerCase() === initialUsers[0].username.toLowerCase());
+            if (!hasDirector) {
+              filtered.unshift(initialUsers[0]);
             }
-          });
-          return merged;
+            return filtered;
+          }
         }
       }
     } catch {}
@@ -132,7 +139,13 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [currentUser, setCurrentUser] = useState<PortalUser | null>(() => {
     try {
       const saved = localStorage.getItem('upes_current_user');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed: PortalUser = JSON.parse(saved);
+        const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
+        if (!blacklist.includes((parsed.username || '').toLowerCase())) {
+          return parsed;
+        }
+      }
     } catch {}
     return null;
   });
@@ -145,16 +158,16 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return u.role;
       }
     } catch {}
-    return 'MASTER_ADMIN';
+    return 'DIRECTOR';
   });
 
   const [activeTab, setActiveTab] = useState<string>('command-center');
 
-  // Automatic clean purge of old mock records from localStorage for fresh deployment
+  // Automatic clean purge of old mock records and unwanted accounts from localStorage
   useEffect(() => {
     try {
       const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer !== 'prod_v4') {
+      if (cleanVer !== 'prod_v7_only_director_manash') {
         localStorage.removeItem('upes_students');
         localStorage.removeItem('upes_companies');
         localStorage.removeItem('upes_drives');
@@ -162,7 +175,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         localStorage.removeItem('upes_round_students');
         localStorage.removeItem('upes_sprs');
         localStorage.removeItem('upes_offers');
-        localStorage.setItem('upes_clean_version', 'prod_v4');
+        localStorage.removeItem('upes_portal_users');
+        localStorage.setItem('upes_portal_users', JSON.stringify(initialUsers));
+        setUsers(initialUsers);
+        publishUsersToCloud(initialUsers);
+        localStorage.setItem('upes_clean_version', 'prod_v7_only_director_manash');
       }
     } catch {}
   }, []);
@@ -424,9 +441,20 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         const cloudUsers = await fetchCloudUsers();
         if (cloudUsers && Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+          const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
+          const validCloudUsers = cloudUsers.filter((cu) => {
+            const uname = (cu.username || '').toLowerCase();
+            const uemail = (cu.email || '').toLowerCase();
+            return (
+              !blacklist.includes(uname) &&
+              !blacklist.includes(uemail) &&
+              (cu.role === 'DIRECTOR' || cu.role === 'CSO' || cu.role === 'CAREER_SERVICE_OFFICER' || cu.role === 'MASTER_ADMIN')
+            );
+          });
+
           setUsers((prev) => {
             const merged = [...prev];
-            cloudUsers.forEach((cu) => {
+            validCloudUsers.forEach((cu) => {
               const idx = merged.findIndex((m) => m.id === cu.id || m.username.toLowerCase() === cu.username.toLowerCase());
               if (idx >= 0) {
                 merged[idx] = { ...merged[idx], ...cu };
@@ -1139,8 +1167,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const createUser = (userData: Omit<PortalUser, 'id' | 'createdAt'>): { success: boolean; message: string } => {
-    if (currentUser?.role !== 'MASTER_ADMIN') {
-      return { success: false, message: 'Only Master Admin has authority to create users.' };
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to create Career Service Officers.' };
     }
     const cleanU = (userData.username || '').trim();
     if (!cleanU) return { success: false, message: 'Username is required.' };
@@ -1166,13 +1195,14 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return next;
     });
 
-    addAuditLog('CREATE_USER', `Master Admin created portal user ${newUser.name} (${newUser.role}).`);
+    addAuditLog('CREATE_USER', `Director created portal user ${newUser.name} (${newUser.role}).`);
     return { success: true, message: `User ${newUser.username} created successfully.` };
   };
 
   const updateUser = (userId: string, data: Partial<PortalUser>): { success: boolean; message: string } => {
-    if (currentUser?.role !== 'MASTER_ADMIN') {
-      return { success: false, message: 'Only Master Admin has authority to edit users.' };
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to edit users.' };
     }
     let targetName = '';
     setUsers((prev) => {
@@ -1186,28 +1216,30 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       publishUsersToCloud(next);
       return next;
     });
-    addAuditLog('UPDATE_USER', `Master Admin updated user ${targetName || userId}.`);
+    addAuditLog('UPDATE_USER', `Director updated user ${targetName || userId}.`);
     return { success: true, message: 'User updated successfully.' };
   };
 
   const deleteUser = (userId: string): { success: boolean; message: string } => {
-    if (currentUser?.role !== 'MASTER_ADMIN') {
-      return { success: false, message: 'Only Master Admin has authority to delete users.' };
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to delete users.' };
     }
     if (currentUser?.id === userId) {
-      return { success: false, message: 'Cannot delete the active Master Admin account.' };
+      return { success: false, message: 'Cannot delete the active Director account.' };
     }
     setUsers((prev) => {
       const next = prev.filter((u) => u.id !== userId);
       publishUsersToCloud(next);
       return next;
     });
-    addAuditLog('DELETE_USER', `Master Admin removed user account ${userId}.`);
+    addAuditLog('DELETE_USER', `Director removed user account ${userId}.`);
     return { success: true, message: 'User deleted successfully.' };
   };
 
   const resetPortalData = () => {
-    if (currentUser?.role !== 'MASTER_ADMIN') return;
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) return;
     setStudents([]);
     setCompanies([]);
     setDrives([]);

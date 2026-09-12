@@ -1,7 +1,7 @@
 import { PortalUser } from '../types';
 import { initialUsers } from '../mock/mockData';
 
-const NTFY_TOPIC = 'upes_portal_users_cloud_sync_v2';
+const NTFY_TOPIC = 'upes_portal_users_cloud_sync_v3_director_only';
 const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 /**

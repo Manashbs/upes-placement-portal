@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const NTFY_TOPIC = 'upes_portal_users_cloud_sync_v2';
+const NTFY_TOPIC = 'upes_portal_users_cloud_sync_v3_director_only';
 const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {

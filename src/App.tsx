@@ -55,8 +55,8 @@ const MainContent: React.FC = () => {
       case 'reports':
         return <ReportsView />;
       case 'settings':
-        // Requirement: Portal settings only visible to Master Admin
-        if (currentUser?.role === 'MASTER_ADMIN') {
+        // Requirement: Portal settings only visible to Master Admin (Director)
+        if (currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN') {
           return <SettingsView />;
         }
         return <CommandCenterView />;
