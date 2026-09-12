@@ -105,11 +105,17 @@ interface PortalContextType {
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
+const DUMMY_SPR_NAMES = ['tanya kapoor', 'rohan mehra', 'divya nair', 'karthik raja', 'ananya roy', 'siddharth sen'];
+function isDummySprList(list: SPR[]): boolean {
+  if (!Array.isArray(list) || list.length < 50) return true;
+  return list.some((s) => DUMMY_SPR_NAMES.includes((s.name || '').toLowerCase().trim()));
+}
+
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<PortalUser[]>(() => {
     try {
       const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer === 'prod_v8_sprs_roster') {
+      if (cleanVer === 'prod_v9_50_sprs_force') {
         const saved = localStorage.getItem('upes_portal_users');
         if (saved) {
           const parsed: PortalUser[] = JSON.parse(saved);
@@ -167,7 +173,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     try {
       const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer !== 'prod_v8_sprs_roster') {
+      const savedSprs = localStorage.getItem('upes_sprs');
+      let sprHasDummy = false;
+      if (savedSprs) {
+        try {
+          const parsed = JSON.parse(savedSprs);
+          if (isDummySprList(parsed)) {
+            sprHasDummy = true;
+          }
+        } catch {
+          sprHasDummy = true;
+        }
+      } else {
+        sprHasDummy = true;
+      }
+
+      if (cleanVer !== 'prod_v9_50_sprs_force' || sprHasDummy) {
         localStorage.removeItem('upes_students');
         localStorage.removeItem('upes_companies');
         localStorage.removeItem('upes_drives');
@@ -181,7 +202,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setSprs(initialSPRs);
         localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
         setSprCycle(initialSPRCycle);
-        localStorage.setItem('upes_clean_version', 'prod_v8_sprs_roster');
+        localStorage.setItem('upes_clean_version', 'prod_v9_50_sprs_force');
       }
     } catch {}
   }, []);
@@ -207,16 +228,16 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   });
   const [sprs, setSprs] = useState<SPR[]>(() => {
     try {
-      const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer === 'prod_v8_sprs_roster') {
-        const saved = localStorage.getItem('upes_sprs');
-        if (saved) {
-          const parsed: SPR[] = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
-          }
+      const saved = localStorage.getItem('upes_sprs');
+      if (saved) {
+        const parsed: SPR[] = JSON.parse(saved);
+        if (!isDummySprList(parsed)) {
+          return parsed;
         }
       }
+    } catch {}
+    try {
+      localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
     } catch {}
     return initialSPRs;
   });
@@ -1259,14 +1280,14 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setRounds([]);
     setRoundStudents([]);
     setOffers([]);
-    setSprs([]);
+    setSprs(initialSPRs);
     setDutyAssignments([]);
     localStorage.removeItem('upes_students');
     localStorage.removeItem('upes_companies');
     localStorage.removeItem('upes_drives');
     localStorage.removeItem('upes_rounds');
     localStorage.removeItem('upes_round_students');
-    localStorage.removeItem('upes_sprs');
+    localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
     localStorage.removeItem('upes_offers');
     localStorage.removeItem('upes_excel_raw_LATEST');
     addAuditLog('RESET_PORTAL_DATA', 'Master Admin purged and reset portal data to clean state.');
