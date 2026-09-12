@@ -4,8 +4,8 @@ import { AlertCircle, Lock, User, ArrowRight, ShieldCheck, Check } from 'lucide-
 
 export const LoginView: React.FC = () => {
   const { login } = usePortal();
-  const [username, setUsername] = useState('Manash.29481@stu.upes.ac.in');
-  const [password, setPassword] = useState('Pass@123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -247,55 +247,6 @@ export const LoginView: React.FC = () => {
             )}
           </button>
         </form>
-
-        {/* Quick Admin Credentials Switcher for Convenience */}
-        <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col items-center space-y-2">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Default Production Accounts
-          </div>
-          <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
-            <button
-              type="button"
-              onClick={() => {
-                setUsername('Manash.29481@stu.upes.ac.in');
-                setPassword('Pass@123');
-              }}
-              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-md font-bold transition-colors cursor-pointer"
-            >
-              Master Admin
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setUsername('Aanchal.gupta@upes.ac.in');
-                setPassword('Pass@123');
-              }}
-              className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-md font-bold transition-colors cursor-pointer"
-            >
-              Aanchal Gupta (PO)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setUsername('officer');
-                setPassword('Pass@123');
-              }}
-              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-medium transition-colors cursor-pointer"
-            >
-              Placement Officer
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setUsername('spr');
-                setPassword('Pass@123');
-              }}
-              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-medium transition-colors cursor-pointer"
-            >
-              SPR Lead
-            </button>
-          </div>
-        </div>
 
       </div>
     </div>

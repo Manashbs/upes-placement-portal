@@ -30,6 +30,7 @@ import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
 import { fetchCloudAttendanceEvents, recordAttendanceToCloud, subscribeToLiveCloudScans, CloudAttendanceEvent } from '../utils/cloudSync';
 import { saveSheetToStorage, getSheetBufferSync, getSheetMetaSync } from '../utils/sheetStorage';
+import { fetchCloudUsers, publishUsersToCloud } from '../utils/userSync';
 
 export interface ComprehensiveCompanyPayload {
   name: string;
@@ -418,9 +419,45 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
     window.addEventListener('upes_live_scan_recorded', handleLiveRecorded);
 
+    // Cloud sync for registered users
+    const syncUsersFromCloud = async () => {
+      try {
+        const cloudUsers = await fetchCloudUsers();
+        if (cloudUsers && Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+          setUsers((prev) => {
+            const merged = [...prev];
+            cloudUsers.forEach((cu) => {
+              const idx = merged.findIndex((m) => m.id === cu.id || m.username.toLowerCase() === cu.username.toLowerCase());
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], ...cu };
+              } else {
+                merged.push(cu);
+              }
+            });
+            try {
+              localStorage.setItem('upes_portal_users', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      } catch {}
+    };
+
+    let userBc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      userBc = new BroadcastChannel('upes_users_live_sync');
+      userBc.onmessage = (evt) => {
+        if (evt.data?.type === 'USERS_UPDATED' && Array.isArray(evt.data.users)) {
+          setUsers(evt.data.users);
+        }
+      };
+    }
+
     const pollInterval = setInterval(reloadFromStorage, 1000);
     const cloudPollInterval = setInterval(syncFromCloud, 2500);
+    const userPollInterval = setInterval(syncUsersFromCloud, 3000);
     syncFromCloud(); // initial fetch on mount
+    syncUsersFromCloud();
 
     return () => {
       window.removeEventListener('storage', handleStorage);
@@ -429,7 +466,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       unsubscribeSSE();
       clearInterval(pollInterval);
       clearInterval(cloudPollInterval);
+      clearInterval(userPollInterval);
       if (bc) bc.close();
+      if (userBc) userBc.close();
     };
   }, []);
 
@@ -1123,9 +1162,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         (u) => u.username.toLowerCase() !== cleanU.toLowerCase() && (!u.email || u.email.toLowerCase() !== cleanU.toLowerCase())
       );
       const next = [newUser, ...filtered];
-      try {
-        localStorage.setItem('upes_portal_users', JSON.stringify(next));
-      } catch {}
+      publishUsersToCloud(next);
       return next;
     });
 
@@ -1146,7 +1183,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
         return u;
       });
-      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      publishUsersToCloud(next);
       return next;
     });
     addAuditLog('UPDATE_USER', `Master Admin updated user ${targetName || userId}.`);
@@ -1162,7 +1199,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
     setUsers((prev) => {
       const next = prev.filter((u) => u.id !== userId);
-      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      publishUsersToCloud(next);
       return next;
     });
     addAuditLog('DELETE_USER', `Master Admin removed user account ${userId}.`);
