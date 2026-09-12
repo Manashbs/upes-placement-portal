@@ -10,7 +10,7 @@ export const LoginView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY?.trim() || '';
+  const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY?.trim() || '6LeGO7gtAAAAAMZl_XdsaiJxM75cYtqu9-gNbyhJ';
   const recaptchaContainerRef = React.useRef<HTMLDivElement>(null);
   const widgetIdRef = React.useRef<number | null>(null);
 
