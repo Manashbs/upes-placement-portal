@@ -54,6 +54,13 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   const getValidStudentsFromParse = () => {
     if (!parseResult) return { createdStudents: [], allValid: [] };
 
+    // Candidates extracted from the sheet — ensure sapId is exactly from the sheet
+    const allValid: Student[] = parseResult.matchedStudents.map((m) => ({
+      ...m.student,
+      sapId: m.recruiterData.candidateId || m.recruiterData.applicantId || m.student.sapId,
+      name: m.recruiterData.rawName || m.student.name,
+    }));
+
     const createdStudents: Student[] = parseResult.unmatchedRows.map((u, i) => ({
       id: `st-new-${Date.now()}-${i}`,
       sapId: u.applicantId,
@@ -70,12 +77,9 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       status: 'ELIGIBLE',
     }));
 
-    const allValid = [
-      ...parseResult.matchedStudents.map((m) => m.student),
-      ...createdStudents,
-    ];
+    const finalStudents = allValid.length > 0 ? allValid : createdStudents;
 
-    return { createdStudents, allValid };
+    return { createdStudents: finalStudents, allValid: finalStudents };
   };
 
   const handleDownloadOriginalWithLinks = () => {
@@ -131,10 +135,16 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       resolveUnknownSapIds(createdStudents);
     }
 
-    // Store the original Excel file buffer in context for later attendance report download
+    // Store the original Excel file buffer and raw rows in context for attendance report download
     const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
     if (rawFileBuffer) {
-      storeOriginalExcel(roundIdForLink, rawFileBuffer);
+      storeOriginalExcel(
+        roundIdForLink,
+        rawFileBuffer,
+        parseResult.headerRow && parseResult.rawRows
+          ? { headers: parseResult.headerRow, rows: parseResult.rawRows }
+          : undefined
+      );
     }
 
     // Auto-download the original sheet with attendance links appended
