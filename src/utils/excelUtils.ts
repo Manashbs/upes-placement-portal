@@ -20,11 +20,12 @@ export interface FuzzyParseResult {
   headersFound: string[];
 }
 
-export function generateCandidateAttendanceLink(roundId: string, sapId: string, studentName?: string): string {
+export function generateCandidateAttendanceLink(roundId: string, sapId: string, studentName?: string, sessionId?: string): string {
   const origin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'https://upes-placement-portal.vercel.app';
   const nameParam = studentName ? `&n=${encodeURIComponent(studentName)}` : '';
-  const tokenHash = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12);
-  return `${origin}/#scan=${encodeURIComponent(roundId)}&t=${tokenHash}${nameParam}&r=${encodeURIComponent(sapId)}`;
+  const sidParam = sessionId ? `&sid=${encodeURIComponent(sessionId)}` : '';
+  const tokenHash = Math.random().toString(36).substring(2, 10);
+  return `${origin}/#scan=${encodeURIComponent(roundId)}${sidParam}&t=${tokenHash}${nameParam}&r=${encodeURIComponent(sapId)}`;
 }
 
 // Broadened keyword lists for smart column detection across any company format
@@ -269,7 +270,8 @@ export function exportOriginalSheetWithAttendanceLinks(
   roundName: string,
   matchedStudents: MatchedCandidate[],
   unmatchedRows: { applicantId: string; name: string; email: string; phone: string; branch: string; raw: any }[],
-  masterStudents: Student[]
+  masterStudents: Student[],
+  sessionId?: string
 ): void {
   const workbook = XLSX.read(originalFileData, { type: 'array' });
   const firstSheetName = workbook.SheetNames[0];
@@ -346,7 +348,7 @@ export function exportOriginalSheetWithAttendanceLinks(
       sapId = rawId || `REG-2026-${String(idx + 1).padStart(3, '0')}`;
     }
 
-    const link = generateCandidateAttendanceLink(roundId, sapId, studentName);
+    const link = generateCandidateAttendanceLink(roundId, sapId, studentName, sessionId);
     const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: newColIndex });
     worksheet[cellRef] = { t: 's', v: link };
   });

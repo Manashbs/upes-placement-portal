@@ -67,8 +67,8 @@ interface PortalContextType {
   toggleCompanyStatus: (id: string, status: Company['status']) => void;
   updateCompanyFeedback: (companyId: string, feedback: string) => void;
   finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
-  createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
-  uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[]) => void;
+  createRound: (roundData: Partial<Round> & { sprsNeeded?: number }, shortlistedStudents: Student[], customSessionId?: string) => void;
+  uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[], customSessionId?: string) => void;
   deleteRound: (roundId: string) => void;
   markAttendance: (roundId: string, sapId: string, method?: string, candidateName?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
@@ -343,14 +343,18 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('FINALIZE_COMPLETED_DRIVE', `Marked company drive ${companyId} as COMPLETED with ${data.offersGivenCount} offers.`);
   };
 
-  const createRound = (roundData: Partial<Round> & { sprsNeeded?: number }, shortlistedStudents: Student[]) => {
+  const createRound = (
+    roundData: Partial<Round> & { sprsNeeded?: number },
+    shortlistedStudents: Student[],
+    customSessionId?: string
+  ) => {
     const companyName = roundData.companyName || 'Company';
     const roundName = roundData.name || 'Round';
-    const roundId = `rnd-${Date.now()}`;
+    const roundId = roundData.id || `rnd-${Date.now()}`;
     const driveId = roundData.driveId || 'drv-1';
     const companyId = roundData.companyId || 'comp-1';
 
-    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60);
+    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, customSessionId);
 
     const sprsNeededCount = roundData.sprsNeeded || 3;
 
@@ -435,7 +439,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     }
 
-    // Create RoundStudent entries
+    // Create RoundStudent entries - all initialized to PENDING
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
       studentId: st.id,
@@ -449,15 +453,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
-    const updatedRoundStudents = [...newRoundStudents, ...roundStudents];
-    const updatedRounds = [newRound, ...rounds];
+    // Filter out any previous students for this roundId
+    const updatedRoundStudents = [
+      ...newRoundStudents,
+      ...roundStudents.filter((rs) => rs.roundId !== roundId),
+    ];
+    const updatedRounds = [newRound, ...rounds.filter((r) => r.id !== roundId)];
 
     syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
     addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates and ${allocatedSprIds.length} allocated SPRs.`);
   };
 
-  const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[]) => {
+  const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[], customSessionId?: string) => {
     const targetRound = rounds.find((r) => r.id === roundId);
     const companyName = targetRound?.companyName || 'Company';
     const roundName = targetRound?.name || 'Round';
@@ -465,7 +473,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Generate a FRESH QR token for this round — this ensures every upload creates
     // a completely new QR session, so old scans won't carry over.
-    const freshQR = generateRoundQRToken(roundId, driveId, companyName, roundName, 60);
+    const freshQR = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, customSessionId);
 
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,

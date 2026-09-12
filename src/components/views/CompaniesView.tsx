@@ -227,24 +227,16 @@ export const CompaniesView: React.FC = () => {
 
                 <div className="border-t border-slate-100 my-4" />
 
-                {/* Metrics: Active drives & Eligible students */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                      Active drives
+                {/* Requirement #4: Show ONLY the number of rounds for that company, updating automatically when a new round is created */}
+                <div>
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    Rounds
+                  </span>
+                  <div className="text-2xl font-extrabold text-slate-900 mt-0.5 flex items-baseline space-x-2">
+                    <span>{compRounds.length}</span>
+                    <span className="text-xs font-semibold text-slate-400">
+                      {compRounds.length === 1 ? 'round' : 'rounds'}
                     </span>
-                    <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                      {comp.activeDrivesCount}
-                    </div>
-                  </div>
-
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                      Eligible students
-                    </span>
-                    <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                      {comp.eligibleStudentsCount.toLocaleString()}
-                    </div>
                   </div>
                 </div>
 

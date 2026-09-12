@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download } from 'lucide-react';
+import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download, Trash2, Maximize2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
@@ -9,7 +9,7 @@ import { Round, RoundStudent, Student } from '../../types';
 import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink, exportOriginalSheetWithAttendanceStatus } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
-  const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, getOriginalExcel } = usePortal();
+  const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, deleteRound, getOriginalExcel } = usePortal();
   const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[1]?.id || rounds[0]?.id || '');
   const [panelFilter, setPanelFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,6 +65,45 @@ export const AttendanceView: React.FC = () => {
     setTimeout(() => setCopiedLinkId(null), 2000);
   };
 
+  const handleDeleteRound = (roundId: string) => {
+    const target = rounds.find((r) => r.id === roundId);
+    const label = target ? `${target.companyName} · ${target.name}` : roundId;
+    if (window.confirm(`Are you sure you want to delete round "${label}"? All associated attendance data will be permanently removed.`)) {
+      deleteRound(roundId);
+      const remaining = rounds.filter((r) => r.id !== roundId);
+      if (remaining.length > 0) {
+        setSelectedRoundId(remaining[0].id);
+      } else {
+        setSelectedRoundId('');
+      }
+    }
+  };
+
+  const handleDownloadInlineQR = () => {
+    if (!selectedRound) return;
+    const svgEl = document.getElementById(`inline-qr-${selectedRound.id}`);
+    if (!svgEl) return;
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width + 40;
+      canvas.height = img.height + 40;
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 20, 20);
+        const pngUrl = canvas.toDataURL('image/png');
+        const dl = document.createElement('a');
+        dl.href = pngUrl;
+        dl.download = `UPES_QR_${selectedRound.companyName}_${selectedRound.name}.png`;
+        dl.click();
+      }
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+  };
+
   return (
     <div className="space-y-8 select-none pb-12">
       {/* Header */}
@@ -99,42 +138,113 @@ export const AttendanceView: React.FC = () => {
             <QrCode className="w-4 h-4 text-amber-400" />
             <span>Scan QR Code</span>
           </button>
-
-          {selectedRound && (
-            <button
-              onClick={() => setShowQRModal(selectedRound)}
-              className="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold px-4 py-2.5 rounded-xl shadow-xs transition-all cursor-pointer"
-            >
-              <span>QR Display Desk</span>
-            </button>
-          )}
         </div>
       </div>
 
       {/* Select Round Selector Pill Bar */}
       <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex items-center space-x-3 overflow-x-auto">
-        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-2">Active Round:</span>
+        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-2 shrink-0">Active Round:</span>
         {rounds.map((r) => {
           const isSelected = r.id === selectedRoundId;
           return (
             <button
               key={r.id}
               onClick={() => setSelectedRoundId(r.id)}
-              className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+              className={`inline-flex items-center space-x-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
                 isSelected
                   ? 'bg-[#0B132B] text-white shadow-md'
                   : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
               }`}
             >
-              {r.companyName} · {r.name}
+              <QrCode className={`w-3 h-3 ${isSelected ? 'text-amber-400' : 'text-slate-400'}`} />
+              <span>{r.companyName} · {r.name}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Live Attendance Stats + Inline QR for Selected Round */}
+      {/* Requirement #3: Dedicated Per-Round Unique QR Control & Live Desk Banner */}
       {selectedRound && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-3 flex-1">
+            <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+              <span className="text-[10px] font-extrabold uppercase px-3 py-1 rounded-full bg-amber-50 text-amber-900 border border-amber-200">
+                {selectedRound.type.replace('_', ' ')}
+              </span>
+              <span className="text-xs text-slate-400 font-bold">•</span>
+              <span className="text-xs font-semibold text-slate-500">
+                {selectedRound.venue}
+              </span>
+              <span className="text-xs text-slate-400 font-bold">•</span>
+              <span className="text-xs font-semibold text-slate-500">
+                {selectedRound.date} ({selectedRound.startTime} - {selectedRound.endTime})
+              </span>
+            </div>
+
+            <div>
+              <h3 className="text-2xl font-extrabold text-slate-900 tracking-tight">
+                {selectedRound.companyName} · {selectedRound.name}
+              </h3>
+              <p className="text-xs font-medium text-slate-500 mt-1">
+                Unique QR session for this specific round. Candidates scanning this QR will have their attendance marked in real-time.
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-3 pt-2 flex-wrap gap-y-2">
+              <button
+                onClick={() => setShowQRModal(selectedRound)}
+                className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+              >
+                <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>Present Fullscreen QR Desk</span>
+              </button>
+
+              <button
+                onClick={handleDownloadInlineQR}
+                className="inline-flex items-center space-x-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-600" />
+                <span>Download QR (PNG)</span>
+              </button>
+
+              {/* Requirement #1: Round should be deletable */}
+              <button
+                onClick={() => handleDeleteRound(selectedRound.id)}
+                className="inline-flex items-center space-x-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold px-3.5 py-2.5 rounded-xl border border-rose-200 transition-all cursor-pointer"
+                title="Delete this round and remove all its attendance records"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Delete Round</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Unique QR Code Display Specifically for Selected Round */}
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col items-center justify-center space-y-2 shrink-0">
+            <div className="p-3 bg-white rounded-xl shadow-xs border border-slate-200/80">
+              <QRCodeSVG
+                id={`inline-qr-${selectedRound.id}`}
+                value={selectedRound.qrToken}
+                size={130}
+                level="H"
+                includeMargin={false}
+              />
+            </div>
+            <div className="text-center">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
+                Round QR Code
+              </span>
+              <span className="text-[9px] font-mono text-slate-400 block max-w-[140px] truncate">
+                {selectedRound.qrToken.slice(0, 18)}...
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Attendance Stats Grid */}
+      {selectedRound && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase">Attendance Rate</span>
@@ -169,58 +279,6 @@ export const AttendanceView: React.FC = () => {
             </div>
             <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold">
               <ShieldCheck className="w-6 h-6 text-amber-400" />
-            </div>
-          </div>
-
-          {/* Per-Round Inline QR Code */}
-          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm flex flex-col items-center justify-center space-y-2">
-            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Round QR Code</span>
-            <div className="p-2 bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
-              <QRCodeSVG
-                id={`inline-qr-${selectedRound.id}`}
-                value={selectedRound.qrToken}
-                size={100}
-                level="H"
-                includeMargin={false}
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => {
-                  const svgEl = document.getElementById(`inline-qr-${selectedRound.id}`);
-                  if (!svgEl) return;
-                  const svgData = new XMLSerializer().serializeToString(svgEl);
-                  const canvas = document.createElement('canvas');
-                  const ctx = canvas.getContext('2d');
-                  const img = new Image();
-                  img.onload = () => {
-                    canvas.width = img.width + 40;
-                    canvas.height = img.height + 40;
-                    if (ctx) {
-                      ctx.fillStyle = '#FFFFFF';
-                      ctx.fillRect(0, 0, canvas.width, canvas.height);
-                      ctx.drawImage(img, 20, 20);
-                      const pngUrl = canvas.toDataURL('image/png');
-                      const dl = document.createElement('a');
-                      dl.href = pngUrl;
-                      dl.download = `QR_${selectedRound.companyName}_${selectedRound.name}.png`;
-                      dl.click();
-                    }
-                  };
-                  img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
-                }}
-                className="text-[10px] font-bold text-slate-600 hover:text-amber-600 bg-slate-100 hover:bg-amber-50 px-2 py-1 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                title="Download QR"
-              >
-                ↓ Download
-              </button>
-              <button
-                onClick={() => setShowQRModal(selectedRound)}
-                className="text-[10px] font-bold text-slate-600 hover:text-amber-600 bg-slate-100 hover:bg-amber-50 px-2 py-1 rounded-lg border border-slate-200 transition-colors cursor-pointer"
-                title="Fullscreen QR"
-              >
-                ⛶ Fullscreen
-              </button>
             </div>
           </div>
         </div>
@@ -431,9 +489,9 @@ export const AttendanceView: React.FC = () => {
         targetRoundId={selectedRound?.id}
         companyName={selectedRound?.companyName}
         roundName={selectedRound?.name}
-        onShortlistValidated={(validStudents: Student[]) => {
+        onShortlistValidated={(validStudents: Student[], sessionId?: string) => {
           if (selectedRound) {
-            uploadShortlistForRound(selectedRound.id, validStudents);
+            uploadShortlistForRound(selectedRound.id, validStudents, sessionId);
           }
           setShowExcelUpload(false);
         }}

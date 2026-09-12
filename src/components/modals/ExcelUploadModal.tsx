@@ -7,7 +7,7 @@ import { Student, RoundStudent } from '../../types';
 interface ExcelUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onShortlistValidated: (students: Student[]) => void;
+  onShortlistValidated: (students: Student[], sessionId?: string) => void;
   targetRoundId?: string;
   companyName?: string;
   roundName?: string;
@@ -26,6 +26,9 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   const [fileName, setFileName] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [rawFileBuffer, setRawFileBuffer] = useState<ArrayBuffer | null>(null);
+  const [uploadSessionId] = useState<string>(
+    () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
+  );
 
   if (!isOpen) return null;
 
@@ -80,7 +83,7 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
 
     const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
 
-    // Use the original-preserving function that appends Attendance Link at the very end
+    // Use the original-preserving function that appends Attendance Link at the very end with unique session ID
     exportOriginalSheetWithAttendanceLinks(
       rawFileBuffer,
       roundIdForLink,
@@ -88,7 +91,8 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       roundName || 'Shortlist',
       parseResult.matchedStudents,
       parseResult.unmatchedRows,
-      students
+      students,
+      uploadSessionId
     );
   };
 
@@ -136,7 +140,7 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     // Auto-download the original sheet with attendance links appended
     handleDownloadOriginalWithLinks();
 
-    onShortlistValidated(allValid);
+    onShortlistValidated(allValid, uploadSessionId);
     onClose();
   };
 

@@ -38,6 +38,10 @@ export const RoundsView: React.FC = () => {
   // Total SPRs needed
   const [sprsNeeded, setSprsNeeded] = useState<number>(3);
   const [shortlistedStudentsTemp, setShortlistedStudentsTemp] = useState<any[]>([]);
+  const [createRoundId, setCreateRoundId] = useState<string>(() => `rnd-${Date.now()}`);
+  const [createRoundSessionId, setCreateRoundSessionId] = useState<string>(
+    () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
+  );
 
   const filteredRounds = rounds.filter((r) => {
     if (activeTab === 'ALL') return true;
@@ -88,6 +92,7 @@ export const RoundsView: React.FC = () => {
 
     createRound(
       {
+        id: createRoundId,
         companyId,
         companyName: targetComp?.name || 'Company',
         name: roundName || `${roundType} Round`,
@@ -100,7 +105,8 @@ export const RoundsView: React.FC = () => {
         endTime: '17:00',
         sprsNeeded,
       },
-      shortlistedStudentsTemp
+      shortlistedStudentsTemp,
+      createRoundSessionId
     );
     setShowCreateModal(false);
     setShortlistedStudentsTemp([]);
@@ -124,7 +130,12 @@ export const RoundsView: React.FC = () => {
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => {
+              setCreateRoundId(`rnd-${Date.now()}`);
+              setCreateRoundSessionId(`ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`);
+              setShortlistedStudentsTemp([]);
+              setShowCreateModal(true);
+            }}
             className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-sm font-extrabold px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -518,15 +529,16 @@ export const RoundsView: React.FC = () => {
           setShowExcelUpload(false);
           setSelectedRoundForUpload(null);
         }}
-        targetRoundId={selectedRoundForUpload?.id}
-        companyName={selectedRoundForUpload?.companyName}
-        roundName={selectedRoundForUpload?.name}
-        onShortlistValidated={(validStudents) => {
+        targetRoundId={selectedRoundForUpload?.id || createRoundId}
+        companyName={selectedRoundForUpload?.companyName || companies.find((c) => c.id === companyId)?.name}
+        roundName={selectedRoundForUpload?.name || roundName || 'Shortlist'}
+        onShortlistValidated={(validStudents, sessionId) => {
           if (selectedRoundForUpload) {
-            uploadShortlistForRound(selectedRoundForUpload.id, validStudents);
+            uploadShortlistForRound(selectedRoundForUpload.id, validStudents, sessionId);
             setSelectedRoundForUpload(null);
           } else {
             setShortlistedStudentsTemp(validStudents);
+            if (sessionId) setCreateRoundSessionId(sessionId);
           }
           setShowExcelUpload(false);
         }}
