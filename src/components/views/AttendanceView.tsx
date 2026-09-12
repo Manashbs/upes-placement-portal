@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
 import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { QRScannerModal } from '../modals/QRScannerModal';
@@ -131,9 +132,9 @@ export const AttendanceView: React.FC = () => {
         })}
       </div>
 
-      {/* Live Attendance Stats */}
+      {/* Live Attendance Stats + Inline QR for Selected Round */}
       {selectedRound && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase">Attendance Rate</span>
@@ -168,6 +169,58 @@ export const AttendanceView: React.FC = () => {
             </div>
             <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold">
               <ShieldCheck className="w-6 h-6 text-amber-400" />
+            </div>
+          </div>
+
+          {/* Per-Round Inline QR Code */}
+          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm flex flex-col items-center justify-center space-y-2">
+            <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Round QR Code</span>
+            <div className="p-2 bg-slate-50 rounded-xl border border-slate-200 shadow-xs">
+              <QRCodeSVG
+                id={`inline-qr-${selectedRound.id}`}
+                value={selectedRound.qrToken}
+                size={100}
+                level="H"
+                includeMargin={false}
+              />
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => {
+                  const svgEl = document.getElementById(`inline-qr-${selectedRound.id}`);
+                  if (!svgEl) return;
+                  const svgData = new XMLSerializer().serializeToString(svgEl);
+                  const canvas = document.createElement('canvas');
+                  const ctx = canvas.getContext('2d');
+                  const img = new Image();
+                  img.onload = () => {
+                    canvas.width = img.width + 40;
+                    canvas.height = img.height + 40;
+                    if (ctx) {
+                      ctx.fillStyle = '#FFFFFF';
+                      ctx.fillRect(0, 0, canvas.width, canvas.height);
+                      ctx.drawImage(img, 20, 20);
+                      const pngUrl = canvas.toDataURL('image/png');
+                      const dl = document.createElement('a');
+                      dl.href = pngUrl;
+                      dl.download = `QR_${selectedRound.companyName}_${selectedRound.name}.png`;
+                      dl.click();
+                    }
+                  };
+                  img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+                }}
+                className="text-[10px] font-bold text-slate-600 hover:text-amber-600 bg-slate-100 hover:bg-amber-50 px-2 py-1 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                title="Download QR"
+              >
+                ↓ Download
+              </button>
+              <button
+                onClick={() => setShowQRModal(selectedRound)}
+                className="text-[10px] font-bold text-slate-600 hover:text-amber-600 bg-slate-100 hover:bg-amber-50 px-2 py-1 rounded-lg border border-slate-200 transition-colors cursor-pointer"
+                title="Fullscreen QR"
+              >
+                ⛶ Fullscreen
+              </button>
             </div>
           </div>
         </div>

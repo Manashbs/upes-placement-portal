@@ -69,6 +69,7 @@ interface PortalContextType {
   finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
   createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
   uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[]) => void;
+  deleteRound: (roundId: string) => void;
   markAttendance: (roundId: string, sapId: string, method?: string, candidateName?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
   triggerSprAllocation: (roundId: string, countNeeded: number) => { success: boolean; count: number };
@@ -459,6 +460,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[]) => {
     const targetRound = rounds.find((r) => r.id === roundId);
     const companyName = targetRound?.companyName || 'Company';
+    const roundName = targetRound?.name || 'Round';
+    const driveId = targetRound?.driveId || 'drv-1';
+
+    // Generate a FRESH QR token for this round — this ensures every upload creates
+    // a completely new QR session, so old scans won't carry over.
+    const freshQR = generateRoundQRToken(roundId, driveId, companyName, roundName, 60);
 
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
@@ -473,16 +480,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
+    // Replace ALL old round students for this round with the fresh set
     const updatedRoundStudents = [
       ...newRoundStudents,
       ...roundStudents.filter((rs) => rs.roundId !== roundId),
     ];
 
+    // Update round with fresh QR token and reset attendance counts
     const updatedRounds = rounds.map((r) =>
       r.id === roundId
         ? {
             ...r,
             totalShortlisted: shortlistedStudents.length,
+            attendedCount: 0,
+            absentCount: 0,
+            qrToken: freshQR.token,
+            qrExpiresAt: freshQR.expiresAtIso,
           }
         : r
     );
@@ -491,8 +504,32 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     addAuditLog(
       'UPLOAD_SHORTLIST',
-      `Uploaded shortlist of ${shortlistedStudents.length} candidates for round ${companyName} ${targetRound?.name || roundId}.`
+      `Uploaded fresh shortlist of ${shortlistedStudents.length} candidates for ${companyName} · ${roundName}. QR token regenerated for new session.`
     );
+  };
+
+  const deleteRound = (roundId: string) => {
+    const target = rounds.find((r) => r.id === roundId);
+    const roundLabel = target ? `${target.companyName} · ${target.name}` : roundId;
+
+    // Remove the round
+    const updatedRounds = rounds.filter((r) => r.id !== roundId);
+    // Remove all round students for this round
+    const updatedRoundStudents = roundStudents.filter((rs) => rs.roundId !== roundId);
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
+    // Remove associated duty assignments
+    setDutyAssignments((prev) => prev.filter((d) => d.roundId !== roundId));
+
+    // Remove stored Excel buffer
+    setOriginalExcelBuffers((prev) => {
+      const next = new Map(prev);
+      next.delete(roundId);
+      return next;
+    });
+
+    addAuditLog('DELETE_ROUND', `Deleted round ${roundLabel} and all associated attendance data.`);
   };
 
   const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN', candidateName?: string) => {
@@ -500,28 +537,31 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!cleanSap) {
       return { success: false, message: 'Invalid candidate SAP ID.' };
     }
+    if (!roundId) {
+      return { success: false, message: 'No round specified for attendance.' };
+    }
 
     const student = students.find((s) => String(s.sapId).trim() === cleanSap);
     const resolvedName = candidateName || student?.name || `Candidate (${cleanSap})`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // Match exact round + sapId, or any sapId match in roundStudents
+    // STRICT: Only match this exact roundId + sapId combination
     const exactIndex = roundStudents.findIndex(
-      (rs) => String(rs.sapId).trim() === cleanSap && (rs.roundId === roundId || !roundId)
+      (rs) => String(rs.sapId).trim() === cleanSap && rs.roundId === roundId
     );
-    const anyIndex = exactIndex !== -1 ? exactIndex : roundStudents.findIndex((rs) => String(rs.sapId).trim() === cleanSap);
-    const targetIndex = exactIndex !== -1 ? exactIndex : anyIndex;
 
-    let targetRoundId = roundId;
     let updatedRoundStudents: RoundStudent[] = [];
 
-    if (targetIndex !== -1) {
-      targetRoundId = roundStudents[targetIndex].roundId || roundId || rounds[0]?.id || 'rnd-1';
+    if (exactIndex !== -1) {
+      // Check if already marked for THIS specific round
+      const existing = roundStudents[exactIndex];
+      if (existing.attendanceStatus === 'PRESENT' || existing.attendanceStatus === 'MANUALLY_MARKED') {
+        return { success: false, message: `Attendance already marked for ${resolvedName} (${cleanSap}) in this round.` };
+      }
 
+      // Mark present ONLY for this exact round + SAP combo
       updatedRoundStudents = roundStudents.map((rs) => {
-        const matchesSap = String(rs.sapId).trim() === cleanSap;
-        const matchesRound = !roundId || rs.roundId === targetRoundId || rs.roundId === roundId;
-        if (matchesSap && matchesRound) {
+        if (String(rs.sapId).trim() === cleanSap && rs.roundId === roundId) {
           return {
             ...rs,
             attendanceStatus: 'PRESENT' as const,
@@ -533,9 +573,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         return rs;
       });
     } else {
-      targetRoundId = roundId || rounds[0]?.id || 'rnd-1';
+      // Student not found in this round's roster — create a new record for THIS round only
       const newRecord: RoundStudent = {
-        roundId: targetRoundId,
+        roundId,
         studentId: student?.id || `st-${cleanSap}`,
         sapId: cleanSap,
         studentName: resolvedName,
@@ -560,7 +600,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
-    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${cleanSap}) via ${method}.`);
+    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${cleanSap}) in round ${roundId} via ${method}.`);
     return { success: true, message: `Attendance verified successfully for ${resolvedName} (${cleanSap})!` };
   };
 
@@ -783,6 +823,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         finalizeCompletedDrive,
         createRound,
         uploadShortlistForRound,
+        deleteRound,
         markAttendance,
         manualAttendanceOverride,
         triggerSprAllocation,

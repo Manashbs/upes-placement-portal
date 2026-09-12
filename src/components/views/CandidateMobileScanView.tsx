@@ -54,7 +54,7 @@ export const CandidateMobileScanView: React.FC = () => {
   // Lookup candidate name dynamically by SAP ID or URL parameter
   const matchedStudent = students.find((s) => String(s.sapId).trim() === cleanSap);
   const matchedRoundStudent = roundStudents.find(
-    (rs) => String(rs.sapId).trim() === cleanSap && (rs.roundId === params.roundId || !params.roundId)
+    (rs) => String(rs.sapId).trim() === cleanSap && rs.roundId === params.roundId
   );
 
   const displayName =
@@ -133,9 +133,11 @@ export const CandidateMobileScanView: React.FC = () => {
               scannedText.includes('UPES') ||
               (Boolean(params.roundId) && scannedText.includes(params.roundId));
 
-            if (isValidQR && cleanSap) {
+            if (isValidQR && cleanSap && params.roundId) {
               isScanningRef.current = false;
-              markAttendance(params.roundId || 'rnd-1', cleanSap, 'REAL_CAMERA_QR_SCAN', displayName);
+              // Use the roundId from the QR token if available, otherwise fall back to URL param
+              const targetRoundId = tokenCheck.data?.roundId || params.roundId;
+              markAttendance(targetRoundId, cleanSap, 'REAL_CAMERA_QR_SCAN', displayName);
               setMarked(true);
               confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2, ChevronRight } from 'lucide-react';
+import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2, ChevronRight, Trash2 } from 'lucide-react';
 import { Round, RoundType, RoundMode } from '../../types';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
@@ -8,7 +8,7 @@ import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 import { exportRosterExcel } from '../../utils/excelUtils';
 
 export const RoundsView: React.FC = () => {
-  const { rounds, companies, createRound, uploadShortlistForRound, roundStudents } = usePortal();
+  const { rounds, companies, createRound, uploadShortlistForRound, deleteRound, roundStudents } = usePortal();
   const [activeTab, setActiveTab] = useState<'ALL' | 'LIVE' | 'UPCOMING' | 'COMPLETED'>('ALL');
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
@@ -290,6 +290,19 @@ export const RoundsView: React.FC = () => {
                   title="Export Round Roster Excel"
                 >
                   <FileSpreadsheet className="w-4 h-4 text-blue-600" />
+                </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Delete round "${round.companyName} · ${round.name}"? This will remove all attendance data for this round.`)) {
+                      deleteRound(round.id);
+                    }
+                  }}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-600 font-bold transition-colors cursor-pointer"
+                  title="Delete Round"
+                >
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             </div>
