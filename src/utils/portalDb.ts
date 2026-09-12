@@ -182,25 +182,55 @@ export function persistToRemoteDatabase(data: Partial<PortalDatabaseState>): voi
 }
 
 /**
- * Sanitize users array to guarantee Director Manash is present and legacy dummy accounts are excluded
+ * Sanitize users array to guarantee Director Manash is present exactly once,
+ * legacy dummy accounts are excluded, and any duplicates are strictly purged.
  */
 export function sanitizeUsers(usersList: PortalUser[]): PortalUser[] {
   const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
-  const valid = (usersList || []).filter((u) => {
-    const uname = (u.username || '').toLowerCase();
-    const uemail = (u.email || '').toLowerCase();
-    return (
-      !blacklist.includes(uname) &&
-      !blacklist.includes(uemail) &&
-      (u.role === 'DIRECTOR' || u.role === 'CSO' || u.role === 'CAREER_SERVICE_OFFICER' || u.role === 'MASTER_ADMIN')
-    );
-  });
+  
+  const seenUsernames = new Set<string>();
+  const seenIds = new Set<string>();
+  const deduplicated: PortalUser[] = [];
 
-  const hasDirector = valid.some((u) => u.username.toLowerCase() === initialUsers[0].username.toLowerCase());
-  if (!hasDirector) {
-    valid.unshift(initialUsers[0]);
+  for (const u of (usersList || [])) {
+    if (!u) continue;
+    const uname = (u.username || '').trim().toLowerCase();
+    const uemail = (u.email || '').trim().toLowerCase();
+    const uid = (u.id || '').trim();
+
+    if (!uname || blacklist.includes(uname) || blacklist.includes(uemail)) {
+      continue;
+    }
+
+    if (
+      u.role !== 'DIRECTOR' &&
+      u.role !== 'CSO' &&
+      u.role !== 'CAREER_SERVICE_OFFICER' &&
+      u.role !== 'MASTER_ADMIN'
+    ) {
+      continue;
+    }
+
+    // Skip any duplicate entries by username or ID
+    if (seenUsernames.has(uname) || (uid && seenIds.has(uid))) {
+      continue;
+    }
+
+    seenUsernames.add(uname);
+    if (uid) seenIds.add(uid);
+    deduplicated.push({
+      ...u,
+      role: u.role === 'MASTER_ADMIN' ? 'DIRECTOR' : u.role,
+    });
   }
-  return valid;
+
+  // Ensure Director Manash is present exactly once
+  const directorUname = initialUsers[0].username.toLowerCase();
+  if (!seenUsernames.has(directorUname)) {
+    deduplicated.unshift(initialUsers[0]);
+  }
+
+  return deduplicated;
 }
 
 /**

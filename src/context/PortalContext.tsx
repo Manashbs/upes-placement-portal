@@ -122,28 +122,11 @@ function isDummySprList(list: SPR[]): boolean {
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [users, setUsers] = useState<PortalUser[]>(() => {
     try {
-      const cleanVer = localStorage.getItem('upes_clean_version');
-      if (cleanVer === 'prod_v9_50_sprs_force') {
-        const saved = localStorage.getItem('upes_portal_users');
-        if (saved) {
-          const parsed: PortalUser[] = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
-            const filtered = parsed.filter((u) => {
-              const uname = (u.username || '').toLowerCase();
-              const uemail = (u.email || '').toLowerCase();
-              return (
-                !blacklist.includes(uname) &&
-                !blacklist.includes(uemail) &&
-                (u.role === 'DIRECTOR' || u.role === 'CSO' || u.role === 'CAREER_SERVICE_OFFICER' || u.role === 'MASTER_ADMIN')
-              );
-            });
-            const hasDirector = filtered.some((u) => u.username.toLowerCase() === initialUsers[0].username.toLowerCase());
-            if (!hasDirector) {
-              filtered.unshift(initialUsers[0]);
-            }
-            return filtered;
-          }
+      const saved = localStorage.getItem('upes_portal_users');
+      if (saved) {
+        const parsed: PortalUser[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return sanitizeUsers(parsed);
         }
       }
     } catch {}
@@ -1383,8 +1366,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!isDirector) {
       return { success: false, message: 'Only Director (Master Admin) has authority to delete users.' };
     }
-    if (currentUser?.id === userId) {
-      return { success: false, message: 'Cannot delete the active Director account.' };
+    const remainingDirectors = users.filter(
+      (u) => u.id !== userId && (u.role === 'DIRECTOR' || u.role === 'MASTER_ADMIN')
+    );
+    if (remainingDirectors.length === 0) {
+      return { success: false, message: 'Cannot delete the only remaining Director account.' };
     }
     setUsers((prev) => {
       const next = prev.filter((u) => u.id !== userId);

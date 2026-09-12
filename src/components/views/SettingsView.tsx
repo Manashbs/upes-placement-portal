@@ -80,8 +80,16 @@ export const SettingsView: React.FC = () => {
     );
   }
 
-  // Filtered users
-  const filteredUsers = users.filter((u) => {
+  // Filtered and strictly deduplicated users
+  const seenUsernames = new Set<string>();
+  const deduplicatedUsers = users.filter((u) => {
+    const uname = (u.username || '').toLowerCase().trim();
+    if (!uname || seenUsernames.has(uname)) return false;
+    seenUsernames.add(uname);
+    return true;
+  });
+
+  const filteredUsers = deduplicatedUsers.filter((u) => {
     const matchesSearch =
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -299,7 +307,11 @@ export const SettingsView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredUsers.map((u) => {
-                const isSelf = u.id === currentUser?.id || u.username === currentUser?.username;
+                const isSelf = u.id === currentUser?.id;
+                const isOnlyDirector =
+                  (u.role === 'DIRECTOR' || u.role === 'MASTER_ADMIN') &&
+                  users.filter((x) => x.role === 'DIRECTOR' || x.role === 'MASTER_ADMIN').length <= 1;
+
                 return (
                   <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="py-3 pl-2">
@@ -358,7 +370,7 @@ export const SettingsView: React.FC = () => {
                           <Edit2 className="w-4 h-4" />
                         </button>
 
-                        {!isSelf && u.id !== 'usr-master-admin' && (
+                        {!isOnlyDirector && (
                           <button
                             onClick={() => handleDeleteUser(u.id, u.name)}
                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
