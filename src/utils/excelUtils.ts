@@ -28,13 +28,28 @@ export function generateCandidateAttendanceLink(roundId: string, sapId: string, 
   return `${origin}/#scan=${encodeURIComponent(roundId)}${sidParam}&t=${tokenHash}${nameParam}&r=${encodeURIComponent(sapId)}`;
 }
 
-// Broadened keyword lists for smart column detection across any company format
-const ID_KEYWORDS = [
-  'sap', 'reg', 'applicant', 'candidate', 'roll', 'urn', 'id', 'no', 'code',
-  's.no', 'sn', 'sl', 'enrollment', 'enroll', 'usn', 'prn', 'scholar',
-  'employee', 'reference', 'ref', 'token', 'serial', 'index', 'admission',
-  'hall ticket', 'seat', 'htno', 'university',
+// Dedicated keyword groups for high-accuracy column detection
+const SERIAL_KEYWORDS = [
+  's.no', 'sr.no', 'sl.no', 's no', 'sr no', 'sl no', 's_no', 'sr_no', 'sl_no',
+  'serial', 's. no', 'sr. no', 'sl. no', 'seq', 's/no', 'sl/no', 'sr/no', 's.no.', 'sr.no.',
+  'row', 'index', '#'
 ];
+
+const SAP_EXACT_KEYWORDS = [
+  'sap id', 'sap_id', 'sap no', 'sapno', 'sap number', 'sap_no', 'sapid', 'sap', 'system id', 'system_id'
+];
+
+const ROLL_OR_REG_KEYWORDS = [
+  'roll no', 'roll_no', 'roll number', 'rollno', 'roll', 'registration no', 'registration number',
+  'reg no', 'reg_no', 'urn', 'enrollment no', 'enrollment number', 'enrollment',
+  'enroll', 'usn', 'prn', 'student id', 'student_id', 'scholar id', 'admission no'
+];
+
+const CANDIDATE_ID_KEYWORDS = [
+  'applicant id', 'applicant_id', 'candidate id', 'candidate_id', 'application no', 'application id',
+  'app id', 'app_id', 'ref no', 'reference no'
+];
+
 const NAME_KEYWORDS = ['name', 'candidate', 'applicant', 'student', 'full name', 'person', 'participant'];
 const EMAIL_KEYWORDS = ['email', 'mail', 'e-mail', 'gmail', 'outlook'];
 const PHONE_KEYWORDS = ['phone', 'mobile', 'contact', 'cell', 'number', 'whatsapp', 'tel'];
@@ -50,7 +65,7 @@ function detectHeaderRow(rawRows: any[][]) {
   for (let i = 0; i < Math.min(10, rawRows.length); i++) {
     const rowStr = rawRows[i].map((c) => String(c).toLowerCase()).join(' ');
     const hasName = NAME_KEYWORDS.some((k) => rowStr.includes(k));
-    const hasId = ID_KEYWORDS.some((k) => rowStr.includes(k));
+    const hasId = SAP_EXACT_KEYWORDS.some((k) => rowStr.includes(k)) || ROLL_OR_REG_KEYWORDS.some((k) => rowStr.includes(k));
     const hasEmail = EMAIL_KEYWORDS.some((k) => rowStr.includes(k));
     const hasBranch = BRANCH_KEYWORDS.some((k) => rowStr.includes(k));
 
@@ -62,10 +77,72 @@ function detectHeaderRow(rawRows: any[][]) {
 
   const headerRow = rawRows[headerRowIndex].map((h) => String(h).trim());
 
+  const isSerialCol = (headerStr: string) => {
+    const lower = headerStr.toLowerCase().trim();
+    if (lower === 'no' || lower === 'no.' || lower === '#') return true;
+    return SERIAL_KEYWORDS.some((sk) => lower === sk || lower.startsWith(sk + ' ') || lower.startsWith(sk + '.'));
+  };
+
+  const findIdColIndex = (): number => {
+    // 1. Search for explicit SAP ID first (highest priority)
+    const sapIdx = headerRow.findIndex((h) => {
+      const lower = h.toLowerCase().trim();
+      return SAP_EXACT_KEYWORDS.some((k) => lower === k || lower.includes(k));
+    });
+    if (sapIdx !== -1) return sapIdx;
+
+    // 2. Search for Roll / Registration / Enrollment / Student ID (excluding serial columns)
+    const rollIdx = headerRow.findIndex((h) => {
+      if (isSerialCol(h)) return false;
+      const lower = h.toLowerCase().trim();
+      return ROLL_OR_REG_KEYWORDS.some((k) => lower === k || lower.includes(k));
+    });
+    if (rollIdx !== -1) return rollIdx;
+
+    // 3. Search for Candidate / Applicant ID (excluding serial columns)
+    const candIdx = headerRow.findIndex((h) => {
+      if (isSerialCol(h)) return false;
+      const lower = h.toLowerCase().trim();
+      return CANDIDATE_ID_KEYWORDS.some((k) => lower === k || lower.includes(k));
+    });
+    if (candIdx !== -1) return candIdx;
+
+    // 4. Data inspection: look for column with 7-11 digits (e.g. 5000xxxxx)
+    for (let c = 0; c < headerRow.length; c++) {
+      if (isSerialCol(headerRow[c])) continue;
+      let sapLikeCount = 0;
+      for (let r = headerRowIndex + 1; r < Math.min(headerRowIndex + 10, rawRows.length); r++) {
+        const val = String(rawRows[r]?.[c] || '').trim();
+        if (/^\d{7,11}$/.test(val) || /^500\d{6,8}$/.test(val)) {
+          sapLikeCount++;
+        }
+      }
+      if (sapLikeCount >= 2) return c;
+    }
+
+    // 5. Generic ID/Code fallback (excluding serial columns)
+    const genIdx = headerRow.findIndex((h) => {
+      if (isSerialCol(h)) return false;
+      const lower = h.toLowerCase().trim();
+      return lower.includes('id') || lower.includes('code');
+    });
+    if (genIdx !== -1) return genIdx;
+
+    return -1;
+  };
+
+  const findNameColIndex = (): number => {
+    return headerRow.findIndex((h) => {
+      const lower = h.toLowerCase().trim();
+      if (lower.includes('company') || lower.includes('college') || lower.includes('university')) return false;
+      return NAME_KEYWORDS.some((k) => lower === k || lower.includes(k));
+    });
+  };
+
   const findColIndex = (keywords: string[]) => {
     return headerRow.findIndex((h) => {
-      const lower = h.toLowerCase();
-      return keywords.some((k) => lower.includes(k));
+      const lower = h.toLowerCase().trim();
+      return keywords.some((k) => lower === k || lower.includes(k));
     });
   };
 
@@ -73,8 +150,8 @@ function detectHeaderRow(rawRows: any[][]) {
     headerRowIndex,
     headerRow,
     headersFound: headerRow.filter(Boolean),
-    idCol: findColIndex(ID_KEYWORDS),
-    nameCol: findColIndex(NAME_KEYWORDS),
+    idCol: findIdColIndex(),
+    nameCol: findNameColIndex(),
     emailCol: findColIndex(EMAIL_KEYWORDS),
     phoneCol: findColIndex(PHONE_KEYWORDS),
     branchCol: findColIndex(BRANCH_KEYWORDS),
@@ -124,11 +201,30 @@ export function parseShortlistExcel(
     if (!rowArray || rowArray.every((cell) => String(cell).trim() === '')) return;
 
     // Extract exact cell values or fallback to column position
-    const rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
+    let rawId = idCol >= 0 && rowArray[idCol] ? String(rowArray[idCol]).trim() : '';
     const rawName = nameCol >= 0 && rowArray[nameCol] ? String(rowArray[nameCol]).trim() : String(rowArray[0] || rowArray[1] || '').trim();
     const rawEmail = emailCol >= 0 && rowArray[emailCol] ? String(rowArray[emailCol]).trim() : '';
     const rawPhone = phoneCol >= 0 && rowArray[phoneCol] ? String(rowArray[phoneCol]).trim() : '';
     const rawBranch = branchCol >= 0 && rowArray[branchCol] ? String(rowArray[branchCol]).trim() : 'N/A';
+
+    // Safeguard against Serial Numbers being taken as SAP ID:
+    // If another cell in the row contains a 7-11 digit SAP number (e.g. 5000xxxxx), prioritize it!
+    for (let c = 0; c < rowArray.length; c++) {
+      if (c === idCol) continue;
+      const cellVal = String(rowArray[c] || '').trim();
+      if (/^\d{7,11}$/.test(cellVal) || /^500\d{6,8}$/.test(cellVal)) {
+        rawId = cellVal;
+        break;
+      }
+    }
+
+    // If rawId is still empty but rawEmail has a SAP ID (e.g. 500012345@stu.upes.ac.in)
+    if (!rawId && rawEmail) {
+      const emailSapMatch = rawEmail.match(/(500\d{6,8}|\d{7,10})/);
+      if (emailSapMatch) {
+        rawId = emailSapMatch[1];
+      }
+    }
 
     if (!rawName && !rawEmail && !rawId) return; // Skip invalid blank rows
 
@@ -138,12 +234,12 @@ export function parseShortlistExcel(
     if (rawEmail && masterMapByEmail.has(rawEmail.toLowerCase())) {
       matchedStudent = masterMapByEmail.get(rawEmail.toLowerCase());
       matchType = 'EMAIL_MATCH';
-    } else if (rawName && masterMapByName.has(rawName.toLowerCase())) {
-      matchedStudent = masterMapByName.get(rawName.toLowerCase());
-      matchType = 'NAME_MATCH';
     } else if (rawId && masterMapBySap.has(rawId)) {
       matchedStudent = masterMapBySap.get(rawId);
       matchType = 'SAP_MATCH';
+    } else if (rawName && masterMapByName.has(rawName.toLowerCase())) {
+      matchedStudent = masterMapByName.get(rawName.toLowerCase());
+      matchType = 'NAME_MATCH';
     } else if (rawPhone && masterMapByPhone.has(rawPhone.replace(/\D/g, ''))) {
       matchedStudent = masterMapByPhone.get(rawPhone.replace(/\D/g, ''));
       matchType = 'PHONE_MATCH';
@@ -155,19 +251,19 @@ export function parseShortlistExcel(
         matchType,
         recruiterData: {
           applicantId: rawId || matchedStudent.sapId,
-          candidateId: rawId,
+          candidateId: rawId || matchedStudent.sapId,
           rawName: rawName || matchedStudent.name,
           rawEmail: rawEmail || matchedStudent.email,
           rawPhone: rawPhone || matchedStudent.phone,
         },
       });
     } else {
-      // Use exact values from Excel row. NEVER generate fake dummy names or fake SAP IDs!
+      // Use exact values from Excel row.
       const candidateId = rawId || `REG-2026-${String(idx + 1).padStart(3, '0')}`;
       unmatchedRows.push({
         applicantId: candidateId,
         name: rawName || `Candidate ${idx + 1}`,
-        email: rawEmail || `${candidateId.toLowerCase()}@upes.ac.in`,
+        email: rawEmail || `${candidateId.toLowerCase()}@stu.upes.ac.in`,
         phone: rawPhone || 'N/A',
         branch: rawBranch || 'N/A',
         raw: rowArray,

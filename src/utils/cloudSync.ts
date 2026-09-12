@@ -8,64 +8,48 @@ export interface CloudAttendanceEvent {
   timestamp: number;
 }
 
-const REGISTRY_OBJECT_ID = 'ff808181a067127101a096b1d1e50345';
-const CLOUD_API_URL = `https://api.restful-api.dev/objects/${REGISTRY_OBJECT_ID}`;
+const NTFY_TOPIC = 'upes_portal_live_attendance_sync_v2';
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 /**
- * Publishes an attendance event to the global cloud registry.
- * This allows candidate mobile phones (iOS/Android) and recruiter laptops to sync
- * attendance in real-time across different devices and networks.
+ * Publishes an attendance event to the real-time cloud channel.
+ * Instant cross-device sync (iPhone/Android to recruiter laptop).
  */
-export async function recordAttendanceToCloud(event: Omit<CloudAttendanceEvent, 'timestamp'>): Promise<boolean> {
+export async function recordAttendanceToCloud(
+  event: Omit<CloudAttendanceEvent, 'timestamp'>
+): Promise<boolean> {
   try {
     const fullEvent: CloudAttendanceEvent = {
       ...event,
       timestamp: Date.now(),
     };
 
-    // 1. Fetch current events from cloud registry
-    let existingEvents: CloudAttendanceEvent[] = [];
+    // 1. Publish to ntfy.sh real-time topic (unlimited, zero-delay SSE pub/sub)
+    let ntfyOk = false;
     try {
-      const getRes = await fetch(CLOUD_API_URL, {
-        headers: { 'Cache-Control': 'no-cache' },
+      const ntfyRes = await fetch(NTFY_URL, {
+        method: 'POST',
+        headers: {
+          'Title': `Attendance: ${fullEvent.studentName} (${fullEvent.sapId})`,
+          'Tags': 'white_check_mark,admission',
+        },
+        body: JSON.stringify(fullEvent),
       });
-      if (getRes.ok) {
-        const json = await getRes.json();
-        if (json && json.data && Array.isArray(json.data.attendanceEvents)) {
-          existingEvents = json.data.attendanceEvents;
-        }
-      }
-    } catch {}
-
-    // Check if already present to avoid duplicates
-    const alreadyRecorded = existingEvents.some(
-      (e) => e.roundId === fullEvent.roundId && String(e.sapId).trim() === String(fullEvent.sapId).trim()
-    );
-
-    if (alreadyRecorded) {
-      return true;
+      ntfyOk = ntfyRes.ok;
+    } catch (e) {
+      console.warn('[CloudSync] ntfy.sh post error:', e);
     }
 
-    // Append new event
-    const updatedEvents = [...existingEvents, fullEvent];
+    // 2. Also POST to local /api/attendance if running on Vercel
+    try {
+      await fetch('/api/attendance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fullEvent),
+      }).catch(() => {});
+    } catch {}
 
-    // 2. Save back to cloud registry
-    const putRes = await fetch(CLOUD_API_URL, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        name: 'UPES_PLACEMENT_PORTAL_MASTER_ATTENDANCE_REGISTRY',
-        data: {
-          version: 1,
-          lastUpdated: Date.now(),
-          attendanceEvents: updatedEvents,
-        },
-      }),
-    });
-
-    // 3. Also dispatch locally via BroadcastChannel & custom event
+    // 3. Dispatch locally via BroadcastChannel & custom event for same-device tabs
     if (typeof BroadcastChannel !== 'undefined') {
       try {
         const bc = new BroadcastChannel('upes_attendance_live_sync');
@@ -74,9 +58,13 @@ export async function recordAttendanceToCloud(event: Omit<CloudAttendanceEvent, 
       } catch {}
     }
 
-    return putRes.ok;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('upes_live_scan_recorded', { detail: fullEvent }));
+    }
+
+    return ntfyOk;
   } catch (err) {
-    console.warn('[CloudSync] Failed to publish attendance event to cloud:', err);
+    console.warn('[CloudSync] Failed to publish attendance event:', err);
     return false;
   }
 }
@@ -86,16 +74,64 @@ export async function recordAttendanceToCloud(event: Omit<CloudAttendanceEvent, 
  */
 export async function fetchCloudAttendanceEvents(): Promise<CloudAttendanceEvent[]> {
   try {
-    const res = await fetch(CLOUD_API_URL, {
+    const res = await fetch(`${NTFY_URL}/json?poll=1&since=all`, {
       headers: { 'Cache-Control': 'no-cache' },
     });
     if (!res.ok) return [];
-    const json = await res.json();
-    if (json && json.data && Array.isArray(json.data.attendanceEvents)) {
-      return json.data.attendanceEvents;
+
+    const text = await res.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+    const events: CloudAttendanceEvent[] = [];
+
+    for (const line of lines) {
+      try {
+        const msgObj = JSON.parse(line);
+        if (msgObj.event === 'message' && msgObj.message) {
+          const parsed = JSON.parse(msgObj.message);
+          if (parsed && parsed.roundId && (parsed.sapId || parsed.studentName)) {
+            events.push(parsed);
+          }
+        }
+      } catch {}
     }
-    return [];
-  } catch {
+
+    return events;
+  } catch (err) {
+    console.warn('[CloudSync] fetchCloudAttendanceEvents error:', err);
     return [];
   }
 }
+
+/**
+ * Creates an EventSource stream for zero-latency instant attendance updates.
+ */
+export function subscribeToLiveCloudScans(
+  onEvent: (event: CloudAttendanceEvent) => void
+): () => void {
+  if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
+    return () => {};
+  }
+
+  try {
+    const es = new EventSource(`${NTFY_URL}/sse`);
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.event === 'message' && data.message) {
+          const ev = JSON.parse(data.message) as CloudAttendanceEvent;
+          if (ev && ev.roundId && (ev.sapId || ev.studentName)) {
+            onEvent(ev);
+          }
+        }
+      } catch {}
+    };
+
+    return () => {
+      es.close();
+    };
+  } catch {
+    return () => {};
+  }
+}
+

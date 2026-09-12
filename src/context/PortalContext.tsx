@@ -26,7 +26,7 @@ import {
 } from '../mock/mockData';
 import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
-import { fetchCloudAttendanceEvents, recordAttendanceToCloud } from '../utils/cloudSync';
+import { fetchCloudAttendanceEvents, recordAttendanceToCloud, subscribeToLiveCloudScans, CloudAttendanceEvent } from '../utils/cloudSync';
 
 export interface ComprehensiveCompanyPayload {
   name: string;
@@ -86,6 +86,7 @@ interface PortalContextType {
   // Original Excel buffer storage (per round) for preserving company sheet format
   storeOriginalExcel: (roundId: string, buffer: ArrayBuffer) => void;
   getOriginalExcel: (roundId: string) => ArrayBuffer | undefined;
+  syncFromCloud: () => Promise<void>;
 }
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
@@ -186,6 +187,81 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   };
 
+  // Helper to apply incoming cloud/SSE attendance events to state & localStorage
+  const applyAttendanceEvents = (events: CloudAttendanceEvent[]) => {
+    if (!events || events.length === 0) return;
+
+    setRoundStudents((prevRs) => {
+      let changed = false;
+      const updatedRs = prevRs.map((rs) => {
+        const rsSap = String(rs.sapId || '').trim();
+        const rsName = String(rs.studentName || '').toLowerCase().trim();
+
+        const matchingCloudEvent = events.find((ev) => {
+          if (ev.roundId !== rs.roundId) return false;
+          const evSap = String(ev.sapId || '').trim();
+          const evName = String(ev.studentName || '').toLowerCase().trim();
+
+          // 1. Exact SAP ID match
+          if (evSap && rsSap && evSap === rsSap) return true;
+          // 2. Exact student name match
+          if (evName && rsName && evName === rsName) return true;
+          // 3. Name contains
+          if (evName && rsName && (evName.includes(rsName) || rsName.includes(evName)) && rsName.length > 3) return true;
+          // 4. Candidate (SAP) match
+          if (evName.includes(`(${rsSap})`) || rsName.includes(`(${evSap})`)) return true;
+          // 5. Student ID match
+          if (rs.studentId && evSap && rs.studentId.trim() === evSap) return true;
+
+          return false;
+        });
+
+        if (matchingCloudEvent && rs.attendanceStatus !== 'PRESENT' && rs.attendanceStatus !== 'MANUALLY_MARKED') {
+          changed = true;
+          return {
+            ...rs,
+            attendanceStatus: 'PRESENT' as const,
+            attendanceTime: matchingCloudEvent.time || rs.attendanceTime || 'Just now',
+            markedBy: matchingCloudEvent.method || 'REAL_CAMERA_QR_SCAN',
+            studentName: rs.studentName || matchingCloudEvent.studentName,
+          };
+        }
+        return rs;
+      });
+
+      if (changed) {
+        try {
+          localStorage.setItem('upes_round_students', JSON.stringify(updatedRs));
+        } catch {}
+        setRounds((prevRounds) => {
+          const nextRounds = prevRounds.map((r) => {
+            const count = updatedRs.filter(
+              (item) => item.roundId === r.id && (item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED')
+            ).length;
+            return { ...r, attendedCount: count };
+          });
+          try {
+            localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+          } catch {}
+          return nextRounds;
+        });
+        return updatedRs;
+      }
+      return prevRs;
+    });
+  };
+
+  const syncFromCloud = async () => {
+    try {
+      const events = await fetchCloudAttendanceEvents();
+      if (events && events.length > 0) {
+        applyAttendanceEvents(events);
+      }
+    } catch (err) {
+      console.warn('[CloudSync] Polling error:', err);
+    }
+  };
+
   // Live real-time cross-tab and cross-window sync
   useEffect(() => {
     const reloadFromStorage = () => {
@@ -213,74 +289,42 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     window.addEventListener('storage', handleStorage);
     window.addEventListener('upes_attendance_updated', reloadFromStorage);
 
+    // BroadcastChannel sync
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
       bc = new BroadcastChannel('upes_attendance_live_sync');
       bc.onmessage = (evt) => {
         if (evt.data?.type === 'ATTENDANCE_LIVE_UPDATE') {
           reloadFromStorage();
+          if (evt.data?.event) {
+            applyAttendanceEvents([evt.data.event]);
+          }
         }
       };
     }
 
-    const pollInterval = setInterval(reloadFromStorage, 1000);
+    // Zero-latency instant SSE stream from candidate mobile devices
+    const unsubscribeSSE = subscribeToLiveCloudScans((ev) => {
+      applyAttendanceEvents([ev]);
+    });
 
-    // Real-Time Cross-Device Cloud Sync (syncs iPhone/Android scans to recruiter laptop)
-    const syncFromCloud = async () => {
-      try {
-        const events = await fetchCloudAttendanceEvents();
-        if (events && events.length > 0) {
-          setRoundStudents((prevRs) => {
-            let changed = false;
-            const updatedRs = prevRs.map((rs) => {
-              const matchingCloudEvent = events.find(
-                (ev) => ev.roundId === rs.roundId && String(ev.sapId).trim() === String(rs.sapId).trim()
-              );
-              if (matchingCloudEvent && rs.attendanceStatus !== 'PRESENT' && rs.attendanceStatus !== 'MANUALLY_MARKED') {
-                changed = true;
-                return {
-                  ...rs,
-                  attendanceStatus: 'PRESENT' as const,
-                  attendanceTime: matchingCloudEvent.time || rs.attendanceTime || 'Just now',
-                  markedBy: matchingCloudEvent.method || 'REAL_CAMERA_QR_SCAN',
-                  studentName: matchingCloudEvent.studentName || rs.studentName,
-                };
-              }
-              return rs;
-            });
-
-            if (changed) {
-              try {
-                localStorage.setItem('upes_round_students', JSON.stringify(updatedRs));
-              } catch {}
-              setRounds((prevRounds) => {
-                const nextRounds = prevRounds.map((r) => {
-                  const count = updatedRs.filter(
-                    (item) => item.roundId === r.id && (item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED')
-                  ).length;
-                  return { ...r, attendedCount: count };
-                });
-                try {
-                  localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
-                } catch {}
-                return nextRounds;
-              });
-              return updatedRs;
-            }
-            return prevRs;
-          });
-        }
-      } catch (err) {
-        console.warn('[CloudSync] Polling error:', err);
+    // Custom window event listener
+    const handleLiveRecorded = (e: any) => {
+      if (e.detail) {
+        applyAttendanceEvents([e.detail]);
       }
     };
+    window.addEventListener('upes_live_scan_recorded', handleLiveRecorded);
 
-    const cloudPollInterval = setInterval(syncFromCloud, 2000);
+    const pollInterval = setInterval(reloadFromStorage, 1000);
+    const cloudPollInterval = setInterval(syncFromCloud, 2500);
     syncFromCloud(); // initial fetch on mount
 
     return () => {
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('upes_attendance_updated', reloadFromStorage);
+      window.removeEventListener('upes_live_scan_recorded', handleLiveRecorded);
+      unsubscribeSSE();
       clearInterval(pollInterval);
       clearInterval(cloudPollInterval);
       if (bc) bc.close();
@@ -921,6 +965,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         toggleGeoFence,
         storeOriginalExcel,
         getOriginalExcel,
+        syncFromCloud,
       }}
     >
       {children}

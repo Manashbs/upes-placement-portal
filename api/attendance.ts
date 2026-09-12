@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const REGISTRY_OBJECT_ID = 'ff808181a067127101a096b1d1e50345';
-const CLOUD_API_URL = `https://api.restful-api.dev/objects/${REGISTRY_OBJECT_ID}`;
+const NTFY_TOPIC = 'upes_portal_live_attendance_sync_v2';
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Enable CORS
@@ -20,9 +20,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (req.method === 'GET') {
-      const resp = await fetch(CLOUD_API_URL, { headers: { 'Cache-Control': 'no-cache' } });
-      const json = await resp.json();
-      return res.status(200).json(json?.data?.attendanceEvents || []);
+      const resp = await fetch(`${NTFY_URL}/json?poll=1&since=all`, { headers: { 'Cache-Control': 'no-cache' } });
+      const text = await resp.text();
+      const lines = text.trim().split('\n').filter(Boolean);
+      const events = lines
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter((e) => e && e.event === 'message' && e.message)
+        .map((e) => { try { return JSON.parse(e.message); } catch { return null; } })
+        .filter(Boolean);
+      return res.status(200).json(events);
     }
 
     if (req.method === 'POST') {
@@ -30,15 +36,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!roundId || !sapId) {
         return res.status(400).json({ error: 'Missing roundId or sapId' });
       }
-
-      let existingEvents: any[] = [];
-      try {
-        const getRes = await fetch(CLOUD_API_URL, { headers: { 'Cache-Control': 'no-cache' } });
-        if (getRes.ok) {
-          const json = await getRes.json();
-          existingEvents = json?.data?.attendanceEvents || [];
-        }
-      } catch {}
 
       const newEvent = {
         roundId,
@@ -50,25 +47,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         timestamp: Date.now(),
       };
 
-      const alreadyRecorded = existingEvents.some(
-        (e) => e.roundId === roundId && String(e.sapId).trim() === String(sapId).trim()
-      );
-
-      if (!alreadyRecorded) {
-        existingEvents.push(newEvent);
-        await fetch(CLOUD_API_URL, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: 'UPES_PLACEMENT_PORTAL_MASTER_ATTENDANCE_REGISTRY',
-            data: {
-              version: 1,
-              lastUpdated: Date.now(),
-              attendanceEvents: existingEvents,
-            },
-          }),
-        });
-      }
+      await fetch(NTFY_URL, {
+        method: 'POST',
+        headers: {
+          'Title': `Attendance: ${newEvent.studentName} (${newEvent.sapId})`,
+          'Tags': 'white_check_mark',
+        },
+        body: JSON.stringify(newEvent),
+      });
 
       return res.status(200).json({ success: true, event: newEvent });
     }

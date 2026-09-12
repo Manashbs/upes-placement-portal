@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download, Trash2, Maximize2 } from 'lucide-react';
+import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download, Trash2, Maximize2, RefreshCw } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
@@ -9,10 +9,11 @@ import { Round, RoundStudent, Student } from '../../types';
 import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink, exportOriginalSheetWithAttendanceStatus } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
-  const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, deleteRound, getOriginalExcel } = usePortal();
+  const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, deleteRound, getOriginalExcel, syncFromCloud } = usePortal();
   const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[1]?.id || rounds[0]?.id || '');
   const [panelFilter, setPanelFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
   
   // Modals state
   const [showQRModal, setShowQRModal] = useState<Round | null>(null);
@@ -326,6 +327,19 @@ export const AttendanceView: React.FC = () => {
               </button>
 
               <button
+                onClick={async () => {
+                  setIsSyncing(true);
+                  await syncFromCloud();
+                  setTimeout(() => setIsSyncing(false), 600);
+                }}
+                className="inline-flex items-center space-x-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold px-3.5 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                title="Sync live scans from mobile phones immediately"
+              >
+                <RefreshCw className={`w-4 h-4 text-white ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Syncing...' : 'Sync Live Scans'}</span>
+              </button>
+
+              <button
                 onClick={() => exportAnnotatedAttendanceExcel(selectedRound.companyName, selectedRound.name, selectedRound.id, currentRoundStudents, 'xlsx')}
                 className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
               >
@@ -365,7 +379,6 @@ export const AttendanceView: React.FC = () => {
                   <tr key={st.studentId} className="hover:bg-slate-50/80 transition-colors">
                     <td className="p-3">
                       <div className="font-extrabold text-slate-900">{st.studentName}</div>
-                      <div className="text-[11px] text-slate-400">{st.email}</div>
                     </td>
 
                     <td className="p-3 font-mono font-bold text-slate-700">{st.sapId}</td>
