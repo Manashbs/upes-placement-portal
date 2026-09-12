@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePortal } from '../../context/PortalContext';
 import { AlertCircle, Lock, User, ArrowRight, ShieldCheck, Check } from 'lucide-react';
 
@@ -9,6 +9,12 @@ export const LoginView: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Keep input boxes empty on mount, preventing any browser autofill persistence
+  useEffect(() => {
+    setUsername('');
+    setPassword('');
+  }, []);
 
   const [recaptchaVerified, setRecaptchaVerified] = useState(false);
   const [recaptchaLoading, setRecaptchaLoading] = useState(false);
@@ -77,27 +83,19 @@ export const LoginView: React.FC = () => {
         
         {/* UPES Brand Logo Header */}
         <div className="flex flex-col items-center justify-center text-center space-y-2 mb-6">
-          <div className="flex items-center space-x-2.5">
-            {/* Authentic UPES Vibrant Ribbon Emblem Recreation */}
-            <svg className="w-11 h-11" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 8C12 8 8 14 8 22C8 30 14 36 22 36C30 36 36 30 36 22" stroke="#00A3E0" strokeWidth="4" strokeLinecap="round" />
-              <path d="M16 10C16 10 12 15 12 22C12 28 17 33 23 33C29 33 34 28 34 22C34 16 30 12 24 12" stroke="#E5007D" strokeWidth="3.5" strokeLinecap="round" />
-              <path d="M20 14C20 14 17 18 17 23C17 27 20 30 24 30C28 30 31 27 31 23C31 19 28 16 24 16" stroke="#FFD100" strokeWidth="3" strokeLinecap="round" />
-              <circle cx="24" cy="23" r="3" fill="#0B132B" />
-            </svg>
-
-            <div className="text-left leading-none">
-              <div className="text-2xl font-black tracking-wider text-slate-900 font-sans">
-                UPES
-              </div>
-              <div className="text-[8px] font-bold tracking-widest text-slate-500 uppercase mt-0.5">
-                UNIVERSITY OF TOMORROW
-              </div>
-            </div>
+          <div className="flex items-center justify-center">
+            <img 
+              src="/upes-logo.svg" 
+              alt="UPES - UNIVERSITY OF TOMORROW" 
+              className="h-12 w-auto max-w-[200px] object-contain select-none pointer-events-none"
+            />
           </div>
 
           <div className="pt-2">
-            <h1 className="text-2xl font-serif text-[#1E3A8A] font-medium tracking-tight">
+            <h1 
+              className="text-2xl text-[#1E3A8A] font-semibold tracking-tight"
+              style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+            >
               Placement Desk
             </h1>
             <p className="text-xs text-slate-500 mt-1 font-normal">
@@ -115,7 +113,11 @@ export const LoginView: React.FC = () => {
         )}
 
         {/* Login Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
+          {/* Decoy hidden inputs to divert aggressive browser credential autofill */}
+          <input type="text" name="fake_username_prevent_autofill" style={{ display: 'none' }} tabIndex={-1} autoComplete="off" />
+          <input type="password" name="fake_password_prevent_autofill" style={{ display: 'none' }} tabIndex={-1} autoComplete="off" />
+
           {/* Username Field */}
           <div className="space-y-1 text-left">
             <label className="block text-xs font-semibold text-slate-600">
@@ -123,11 +125,14 @@ export const LoginView: React.FC = () => {
             </label>
             <input
               type="text"
+              name="upes_login_user"
+              id="upes_login_user"
               required
+              autoComplete="off"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="e.g. Manash.29481@stu.upes.ac.in"
-              className="w-full px-3 py-2 text-sm bg-white border border-[#F59E0B] rounded-md outline-none text-slate-800 focus:ring-2 focus:ring-amber-400/40 focus:border-amber-600 transition-all font-medium"
+              placeholder=""
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-md outline-none text-slate-800 focus:ring-2 focus:ring-amber-400/40 focus:border-amber-500 transition-all font-medium"
             />
           </div>
 
@@ -138,10 +143,13 @@ export const LoginView: React.FC = () => {
             </label>
             <input
               type="password"
+              name="upes_login_pwd"
+              id="upes_login_pwd"
               required
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder=""
               className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-md outline-none text-slate-800 focus:ring-2 focus:ring-amber-400/40 focus:border-amber-500 transition-all font-medium"
             />
           </div>
