@@ -1,24 +1,29 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download, Trash2, Maximize2, RefreshCw } from 'lucide-react';
+import { UserCheck, QrCode, Search, CheckCircle2, Clock, AlertTriangle, ShieldCheck, Upload, Link, Copy, FileSpreadsheet, Download, Trash2, Maximize2, RefreshCw, Calendar } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
-import { QRScannerModal } from '../modals/QRScannerModal';
 import { Round, RoundStudent, Student } from '../../types';
 import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink, exportExactSheetWithAttendance } from '../../utils/excelUtils';
 
 export const AttendanceView: React.FC = () => {
   const { rounds, roundStudents, students, manualAttendanceOverride, createRound, uploadShortlistForRound, deleteRound, getOriginalExcel, getOriginalExcelRaw, syncFromCloud } = usePortal();
-  const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[1]?.id || rounds[0]?.id || '');
+  const [selectedRoundId, setSelectedRoundId] = useState<string>(rounds[0]?.id || '');
   const [panelFilter, setPanelFilter] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   
+  // Keep selected round synchronized
+  useEffect(() => {
+    if (rounds.length > 0 && (!selectedRoundId || !rounds.some((r) => r.id === selectedRoundId))) {
+      setSelectedRoundId(rounds[0].id);
+    }
+  }, [rounds, selectedRoundId]);
+
   // Modals state
   const [showQRModal, setShowQRModal] = useState<Round | null>(null);
   const [showExcelUpload, setShowExcelUpload] = useState(false);
-  const [showQRScanner, setShowQRScanner] = useState(false);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
 
   // Override modal state
@@ -122,47 +127,52 @@ export const AttendanceView: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-3 flex-wrap gap-y-2">
-          {/* Upload Shortlist Button */}
-          <button
-            onClick={() => setShowExcelUpload(true)}
-            className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Upload Shortlist Excel</span>
-          </button>
-
-          {/* Scan QR Code Button */}
-          <button
-            onClick={() => setShowQRScanner(true)}
-            className="inline-flex items-center space-x-2 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-md transition-all cursor-pointer"
-          >
-            <QrCode className="w-4 h-4 text-amber-400" />
-            <span>Scan QR Code</span>
-          </button>
+          {/* Upload Shortlist Button: Available ONLY if a placement round exists */}
+          {rounds.length > 0 && (
+            <button
+              onClick={() => setShowExcelUpload(true)}
+              className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Upload Shortlist Excel</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Select Round Selector Pill Bar */}
-      <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex items-center space-x-3 overflow-x-auto">
-        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-2 shrink-0">Active Round:</span>
-        {rounds.map((r) => {
-          const isSelected = r.id === selectedRoundId;
-          return (
-            <button
-              key={r.id}
-              onClick={() => setSelectedRoundId(r.id)}
-              className={`inline-flex items-center space-x-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                isSelected
-                  ? 'bg-[#0B132B] text-white shadow-md'
-                  : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <QrCode className={`w-3 h-3 ${isSelected ? 'text-amber-400' : 'text-slate-400'}`} />
-              <span>{r.companyName} · {r.name}</span>
-            </button>
-          );
-        })}
-      </div>
+      {rounds.length > 0 ? (
+        <div className="bg-white rounded-3xl p-4 border border-slate-100 shadow-sm flex items-center space-x-3 overflow-x-auto">
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider px-2 shrink-0">Active Round:</span>
+          {rounds.map((r) => {
+            const isSelected = r.id === selectedRoundId;
+            return (
+              <button
+                key={r.id}
+                onClick={() => setSelectedRoundId(r.id)}
+                className={`inline-flex items-center space-x-1.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                  isSelected
+                    ? 'bg-[#0B132B] text-white shadow-md'
+                    : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <QrCode className={`w-3 h-3 ${isSelected ? 'text-amber-400' : 'text-slate-400'}`} />
+                <span>{r.companyName} · {r.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="bg-white rounded-3xl p-10 border border-slate-100 shadow-sm text-center">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
+            <Calendar className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-extrabold text-slate-900">No Placement Rounds Available</h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+            Create a placement round in the <strong>Rounds</strong> tab to start tracking live attendance and uploading shortlist sheets.
+          </p>
+        </div>
+      )}
 
       {/* Requirement #3: Dedicated Per-Round Unique QR Control & Live Desk Banner */}
       {selectedRound && (
@@ -514,13 +524,6 @@ export const AttendanceView: React.FC = () => {
           }
           setShowExcelUpload(false);
         }}
-      />
-
-      {/* QR Code Scanner Tool Modal */}
-      <QRScannerModal
-        isOpen={showQRScanner}
-        onClose={() => setShowQRScanner(false)}
-        targetRoundId={selectedRoundId}
       />
     </div>
   );
