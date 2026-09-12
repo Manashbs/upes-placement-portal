@@ -1,4 +1,17 @@
-export type UserRole = 'PLACEMENT_OFFICER' | 'SPR' | 'STUDENT' | 'RECRUITER' | 'SUPER_ADMIN';
+export type UserRole = 'MASTER_ADMIN' | 'PLACEMENT_OFFICER' | 'SPR' | 'STUDENT' | 'RECRUITER' | 'SUPER_ADMIN' | 'VIEWER';
+
+export interface PortalUser {
+  id: string;
+  username: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  password?: string;
+  status: 'ACTIVE' | 'DISABLED';
+  department?: string;
+  createdAt: string;
+  lastLogin?: string;
+}
 
 export type TierType = 'DREAM' | 'SUPER_DREAM' | 'CORE' | 'MASS';
 

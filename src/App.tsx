@@ -12,6 +12,7 @@ import { ReportsView } from './components/views/ReportsView';
 import { SettingsView } from './components/views/SettingsView';
 import { StudentPortalView } from './components/views/StudentPortalView';
 import { SPRPortalView } from './components/views/SPRPortalView';
+import { LoginView } from './components/views/LoginView';
 
 import { CandidateMobileScanView } from './components/views/CandidateMobileScanView';
 
@@ -27,7 +28,7 @@ function checkIsScanUrl(): boolean {
 }
 
 const MainContent: React.FC = () => {
-  const { activeTab, currentRole } = usePortal();
+  const { activeTab, currentRole, currentUser } = usePortal();
 
   const renderActiveView = () => {
     // If student role selected
@@ -54,9 +55,13 @@ const MainContent: React.FC = () => {
       case 'reports':
         return <ReportsView />;
       case 'settings':
-        return <SettingsView />;
+        // Requirement: Portal settings only visible to Master Admin
+        if (currentUser?.role === 'MASTER_ADMIN') {
+          return <SettingsView />;
+        }
+        return <CommandCenterView />;
       default:
-        return <SPRRotationView />;
+        return <CommandCenterView />;
     }
   };
 
@@ -68,6 +73,29 @@ const MainContent: React.FC = () => {
           {renderActiveView()}
         </div>
       </main>
+    </div>
+  );
+};
+
+const PortalAppContent: React.FC<{ isScanView: boolean }> = ({ isScanView }) => {
+  const { currentUser } = usePortal();
+
+  // Mobile candidate QR scan view does not require portal login
+  if (isScanView) {
+    return <CandidateMobileScanView />;
+  }
+
+  // If user is not logged in, display the Login View matching Screenshot 1
+  if (!currentUser) {
+    return <LoginView />;
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col font-sans bg-slate-50 text-slate-900 antialiased">
+      <div className="flex-1 flex overflow-hidden">
+        <Sidebar />
+        <MainContent />
+      </div>
     </div>
   );
 };
@@ -87,22 +115,9 @@ export function App() {
     };
   }, []);
 
-  if (isScanView) {
-    return (
-      <PortalProvider>
-        <CandidateMobileScanView />
-      </PortalProvider>
-    );
-  }
-
   return (
     <PortalProvider>
-      <div className="min-h-screen flex flex-col font-sans bg-slate-50 text-slate-900 antialiased">
-        <div className="flex-1 flex overflow-hidden">
-          <Sidebar />
-          <MainContent />
-        </div>
-      </div>
+      <PortalAppContent isScanView={isScanView} />
     </PortalProvider>
   );
 }

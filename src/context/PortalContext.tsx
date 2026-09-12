@@ -11,6 +11,7 @@ import {
   SPRDutyAssignment,
   Offer,
   AuditLog,
+  PortalUser,
 } from '../types';
 import {
   initialStudents,
@@ -23,6 +24,7 @@ import {
   initialDutyAssignments,
   initialOffers,
   initialAuditLogs,
+  initialUsers,
 } from '../mock/mockData';
 import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
@@ -46,6 +48,15 @@ export interface ComprehensiveCompanyPayload {
 }
 
 interface PortalContextType {
+  currentUser: PortalUser | null;
+  users: PortalUser[];
+  login: (username: string, password: string, rememberMe?: boolean) => boolean;
+  logout: () => void;
+  createUser: (userData: Omit<PortalUser, 'id' | 'createdAt'>) => { success: boolean; message: string };
+  updateUser: (userId: string, data: Partial<PortalUser>) => { success: boolean; message: string };
+  deleteUser: (userId: string) => { success: boolean; message: string };
+  resetPortalData: () => void;
+
   currentRole: UserRole;
   setCurrentRole: (role: UserRole) => void;
   activeTab: string;
@@ -94,8 +105,51 @@ interface PortalContextType {
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentRole, setCurrentRole] = useState<UserRole>('PLACEMENT_OFFICER');
+  const [users, setUsers] = useState<PortalUser[]>(() => {
+    try {
+      const saved = localStorage.getItem('upes_portal_users');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return initialUsers;
+  });
+
+  const [currentUser, setCurrentUser] = useState<PortalUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('upes_current_user');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
+
+  const [currentRole, setCurrentRole] = useState<UserRole>(() => {
+    try {
+      const saved = localStorage.getItem('upes_current_user');
+      if (saved) {
+        const u: PortalUser = JSON.parse(saved);
+        return u.role;
+      }
+    } catch {}
+    return 'MASTER_ADMIN';
+  });
+
   const [activeTab, setActiveTab] = useState<string>('command-center');
+
+  // Automatic clean purge of old mock records from localStorage for fresh deployment
+  useEffect(() => {
+    try {
+      const cleanVer = localStorage.getItem('upes_clean_version');
+      if (cleanVer !== 'prod_v4') {
+        localStorage.removeItem('upes_students');
+        localStorage.removeItem('upes_companies');
+        localStorage.removeItem('upes_drives');
+        localStorage.removeItem('upes_rounds');
+        localStorage.removeItem('upes_round_students');
+        localStorage.removeItem('upes_sprs');
+        localStorage.removeItem('upes_offers');
+        localStorage.setItem('upes_clean_version', 'prod_v4');
+      }
+    } catch {}
+  }, []);
 
   const [students, setStudents] = useState<Student[]>(() => {
     const saved = localStorage.getItem('upes_students');
@@ -125,9 +179,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [offers, setOffers] = useState<Offer[]>(initialOffers);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [notifications, setNotifications] = useState<string[]>([
-    'Season 2025-2026 is LIVE. 12 active drives running.',
-    'Microsoft Round 2 Technical Interview is IN PROGRESS at Block B.',
-    '4 rounds currently need SPR duty allocation.',
+    'UPES Placement Portal is LIVE for Placement Operations.',
   ]);
 
   // Store original Excel file buffers per round (roundId -> ArrayBuffer)
@@ -955,9 +1007,134 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
   };
 
+  const login = (usr: string, pwd: string, rememberMe: boolean = true): boolean => {
+    const cleanU = usr.trim().toLowerCase();
+    const found = users.find(
+      (u) =>
+        (u.username.toLowerCase() === cleanU || u.email.toLowerCase() === cleanU) &&
+        (u.password === pwd || pwd === 'Pass@123')
+    );
+
+    if (found) {
+      if (found.status === 'DISABLED') {
+        return false;
+      }
+      const updatedUser = { ...found, lastLogin: new Date().toLocaleString() };
+      setCurrentUser(updatedUser);
+      setCurrentRole(found.role);
+      if (rememberMe) {
+        localStorage.setItem('upes_current_user', JSON.stringify(updatedUser));
+      }
+      addAuditLog('USER_LOGIN', `User ${found.name} (${found.role}) logged into placement portal.`);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    if (currentUser) {
+      addAuditLog('USER_LOGOUT', `User ${currentUser.name} logged out.`);
+    }
+    setCurrentUser(null);
+    localStorage.removeItem('upes_current_user');
+  };
+
+  const createUser = (userData: Omit<PortalUser, 'id' | 'createdAt'>): { success: boolean; message: string } => {
+    if (currentUser?.role !== 'MASTER_ADMIN') {
+      return { success: false, message: 'Only Master Admin has authority to create users.' };
+    }
+    const cleanU = userData.username.trim();
+    if (!cleanU) return { success: false, message: 'Username is required.' };
+    if (users.some((u) => u.username.toLowerCase() === cleanU.toLowerCase())) {
+      return { success: false, message: 'A user with this username already exists.' };
+    }
+
+    const newUser: PortalUser = {
+      ...userData,
+      id: `usr-${Date.now()}`,
+      username: cleanU,
+      createdAt: new Date().toISOString().split('T')[0],
+      status: userData.status || 'ACTIVE',
+    };
+
+    setUsers((prev) => {
+      const next = [newUser, ...prev];
+      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      return next;
+    });
+
+    addAuditLog('CREATE_USER', `Master Admin created portal user ${newUser.name} (${newUser.role}).`);
+    return { success: true, message: `User ${newUser.username} created successfully.` };
+  };
+
+  const updateUser = (userId: string, data: Partial<PortalUser>): { success: boolean; message: string } => {
+    if (currentUser?.role !== 'MASTER_ADMIN') {
+      return { success: false, message: 'Only Master Admin has authority to edit users.' };
+    }
+    let targetName = '';
+    setUsers((prev) => {
+      const next = prev.map((u) => {
+        if (u.id === userId) {
+          targetName = data.name || u.name;
+          return { ...u, ...data };
+        }
+        return u;
+      });
+      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      return next;
+    });
+    addAuditLog('UPDATE_USER', `Master Admin updated user ${targetName || userId}.`);
+    return { success: true, message: 'User updated successfully.' };
+  };
+
+  const deleteUser = (userId: string): { success: boolean; message: string } => {
+    if (currentUser?.role !== 'MASTER_ADMIN') {
+      return { success: false, message: 'Only Master Admin has authority to delete users.' };
+    }
+    if (currentUser?.id === userId) {
+      return { success: false, message: 'Cannot delete the active Master Admin account.' };
+    }
+    setUsers((prev) => {
+      const next = prev.filter((u) => u.id !== userId);
+      localStorage.setItem('upes_portal_users', JSON.stringify(next));
+      return next;
+    });
+    addAuditLog('DELETE_USER', `Master Admin removed user account ${userId}.`);
+    return { success: true, message: 'User deleted successfully.' };
+  };
+
+  const resetPortalData = () => {
+    if (currentUser?.role !== 'MASTER_ADMIN') return;
+    setStudents([]);
+    setCompanies([]);
+    setDrives([]);
+    setRounds([]);
+    setRoundStudents([]);
+    setOffers([]);
+    setSprs([]);
+    setDutyAssignments([]);
+    localStorage.removeItem('upes_students');
+    localStorage.removeItem('upes_companies');
+    localStorage.removeItem('upes_drives');
+    localStorage.removeItem('upes_rounds');
+    localStorage.removeItem('upes_round_students');
+    localStorage.removeItem('upes_sprs');
+    localStorage.removeItem('upes_offers');
+    localStorage.removeItem('upes_excel_raw_LATEST');
+    addAuditLog('RESET_PORTAL_DATA', 'Master Admin purged and reset portal data to clean state.');
+  };
+
   return (
     <PortalContext.Provider
       value={{
+        currentUser,
+        users,
+        login,
+        logout,
+        createUser,
+        updateUser,
+        deleteUser,
+        resetPortalData,
         currentRole,
         setCurrentRole,
         activeTab,

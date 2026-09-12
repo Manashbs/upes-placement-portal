@@ -9,11 +9,16 @@ import {
   BarChart3,
   Sliders,
   Sparkles,
+  LogOut,
+  Shield,
+  User,
 } from 'lucide-react';
 import { usePortal } from '../../context/PortalContext';
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab, currentRole } = usePortal();
+  const { activeTab, setActiveTab, currentRole, currentUser, logout } = usePortal();
+
+  const isMasterAdmin = currentUser?.role === 'MASTER_ADMIN';
 
   const operationsNav = [
     { id: 'command-center', label: 'Command center', icon: LayoutDashboard },
@@ -28,12 +33,12 @@ export const Sidebar: React.FC = () => {
     { id: 'settings', label: 'Portal settings', icon: Sliders },
   ];
 
-  // If student or SPR role selected, show dedicated portal items
+  // If student role selected, show dedicated student items
   if (currentRole === 'STUDENT') {
     return (
-      <aside className="w-64 bg-[#0B132B] text-white flex flex-col shrink-0 min-h-screen border-r border-slate-800">
+      <aside className="w-64 bg-[#0B132B] text-white flex flex-col shrink-0 min-h-screen border-r border-slate-800 select-none">
         <div className="p-6 flex items-center space-x-3 border-b border-slate-800/60">
-          <div className="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center font-bold text-slate-950 text-xl shadow-lg shadow-amber-500/20">
+          <div className="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center font-black text-slate-950 text-xl shadow-lg shadow-amber-500/20">
             UP
           </div>
           <div>
@@ -42,7 +47,7 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        <div className="px-4 py-6">
+        <div className="px-4 py-6 flex-1">
           <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest px-3 mb-3">
             STUDENT DESK
           </div>
@@ -58,7 +63,7 @@ export const Sidebar: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     isActive
                       ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/50'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
@@ -71,15 +76,26 @@ export const Sidebar: React.FC = () => {
             })}
           </nav>
         </div>
+
+        {/* User profile card & logout */}
+        <div className="p-4 border-t border-slate-800/60">
+          <button
+            onClick={logout}
+            className="w-full flex items-center justify-between px-3 py-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-xl transition-all cursor-pointer font-bold"
+          >
+            <span>Sign out</span>
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </aside>
     );
   }
 
   if (currentRole === 'SPR') {
     return (
-      <aside className="w-64 bg-[#0B132B] text-white flex flex-col shrink-0 min-h-screen border-r border-slate-800">
+      <aside className="w-64 bg-[#0B132B] text-white flex flex-col shrink-0 min-h-screen border-r border-slate-800 select-none">
         <div className="p-6 flex items-center space-x-3 border-b border-slate-800/60">
-          <div className="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center font-bold text-slate-950 text-xl shadow-lg shadow-amber-500/20">
+          <div className="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center font-black text-slate-950 text-xl shadow-lg shadow-amber-500/20">
             UP
           </div>
           <div>
@@ -88,7 +104,7 @@ export const Sidebar: React.FC = () => {
           </div>
         </div>
 
-        <div className="px-4 py-6">
+        <div className="px-4 py-6 flex-1">
           <div className="text-[11px] font-bold text-slate-400 uppercase tracking-widest px-3 mb-3">
             DUTY MANAGEMENT
           </div>
@@ -103,7 +119,7 @@ export const Sidebar: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     isActive
                       ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/50'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
@@ -116,13 +132,23 @@ export const Sidebar: React.FC = () => {
             })}
           </nav>
         </div>
+
+        <div className="p-4 border-t border-slate-800/60">
+          <button
+            onClick={logout}
+            className="w-full flex items-center justify-between px-3 py-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-xl transition-all cursor-pointer font-bold"
+          >
+            <span>Sign out</span>
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
       </aside>
     );
   }
 
   return (
     <aside className="w-64 bg-[#0B132B] text-white flex flex-col shrink-0 min-h-screen border-r border-slate-800 select-none">
-      {/* UPES Brand Header */}
+      {/* UPES Brand Header matching Screenshot 2 */}
       <div className="p-6 flex items-center space-x-3 border-b border-slate-800/60">
         <div className="w-10 h-10 bg-[#F59E0B] rounded-xl flex items-center justify-center font-black text-slate-950 text-xl shadow-lg shadow-amber-500/20">
           UP
@@ -150,7 +176,7 @@ export const Sidebar: React.FC = () => {
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
                     isActive
                       ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/60'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
@@ -169,32 +195,59 @@ export const Sidebar: React.FC = () => {
           </nav>
         </div>
 
-        {/* WORKSPACE Section */}
-        <div>
-          <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest px-3 mb-3">
-            WORKSPACE
+        {/* WORKSPACE Section — ONLY visible to Master Admin (Requirement #3) */}
+        {isMasterAdmin && (
+          <div>
+            <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest px-3 mb-3">
+              WORKSPACE
+            </div>
+            <nav className="space-y-1">
+              {workspaceNav.map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/60'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                  >
+                    <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
           </div>
-          <nav className="space-y-1">
-            {workspaceNav.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive
-                      ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/60'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
+        )}
+      </div>
+
+      {/* Authenticated User Footer & Sign out */}
+      <div className="p-4 border-t border-slate-800/60 bg-slate-950/40 space-y-2">
+        <div className="flex items-center space-x-3 px-2 py-1">
+          <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs border border-amber-500/30 shrink-0">
+            {isMasterAdmin ? <Shield className="w-4 h-4 text-amber-400" /> : <User className="w-4 h-4 text-slate-300" />}
+          </div>
+          <div className="overflow-hidden flex-1">
+            <div className="text-xs font-bold text-white truncate">
+              {currentUser?.name || 'Master Admin'}
+            </div>
+            <div className="text-[10px] text-amber-400 font-extrabold uppercase tracking-wider truncate">
+              {currentUser?.role?.replace('_', ' ') || 'MASTER ADMIN'}
+            </div>
+          </div>
         </div>
+
+        <button
+          onClick={logout}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded-xl transition-all cursor-pointer font-bold"
+        >
+          <span>Sign out</span>
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </aside>
   );

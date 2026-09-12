@@ -1,0 +1,211 @@
+import React, { useState } from 'react';
+import { usePortal } from '../../context/PortalContext';
+import { AlertCircle, Lock, User, ArrowRight, ShieldCheck, Check } from 'lucide-react';
+
+export const LoginView: React.FC = () => {
+  const { login } = usePortal();
+  const [username, setUsername] = useState('Manash.29481@stu.upes.ac.in');
+  const [password, setPassword] = useState('Pass@123');
+  const [rememberMe, setRememberMe] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    setTimeout(() => {
+      const success = login(username, password, rememberMe);
+      if (!success) {
+        setError('Invalid username or password. Please check credentials.');
+        setLoading(false);
+      }
+    }, 400);
+  };
+
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center relative p-4 select-none overflow-hidden bg-[#edf2f7]">
+      {/* Background Geometric Diamond Grid Pattern matching Screenshot 1 */}
+      <div 
+        className="absolute inset-0 pointer-events-none opacity-80"
+        style={{
+          backgroundImage: `radial-gradient(#cbd5e1 1.5px, transparent 1.5px), radial-gradient(#e2e8f0 1.5px, #edf2f7 1.5px)`,
+          backgroundSize: '32px 32px',
+          backgroundPosition: '0 0, 16px 16px',
+        }}
+      />
+
+      {/* Decorative subtle ambient backdrop highlights */}
+      <div 
+        className="absolute inset-0 pointer-events-none opacity-40"
+        style={{
+          backgroundImage: `
+            linear-gradient(45deg, rgba(226, 232, 240, 0.6) 25%, transparent 25%),
+            linear-gradient(-45deg, rgba(226, 232, 240, 0.6) 25%, transparent 25%),
+            linear-gradient(45deg, transparent 75%, rgba(226, 232, 240, 0.6) 75%),
+            linear-gradient(-45deg, transparent 75%, rgba(226, 232, 240, 0.6) 75%)
+          `,
+          backgroundSize: '40px 40px',
+          backgroundPosition: '0 0, 0 20px, 20px -20px, -20px 0px',
+        }}
+      />
+
+      {/* Login Floating White Card */}
+      <div className="relative z-10 w-full max-w-[420px] bg-white rounded-xl shadow-xl border border-slate-200/90 px-8 sm:px-10 py-10 transition-all">
+        
+        {/* UPES Brand Logo Header */}
+        <div className="flex flex-col items-center justify-center text-center space-y-2 mb-6">
+          <div className="flex items-center space-x-2.5">
+            {/* Authentic UPES Vibrant Ribbon Emblem Recreation */}
+            <svg className="w-11 h-11" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 8C12 8 8 14 8 22C8 30 14 36 22 36C30 36 36 30 36 22" stroke="#00A3E0" strokeWidth="4" strokeLinecap="round" />
+              <path d="M16 10C16 10 12 15 12 22C12 28 17 33 23 33C29 33 34 28 34 22C34 16 30 12 24 12" stroke="#E5007D" strokeWidth="3.5" strokeLinecap="round" />
+              <path d="M20 14C20 14 17 18 17 23C17 27 20 30 24 30C28 30 31 27 31 23C31 19 28 16 24 16" stroke="#FFD100" strokeWidth="3" strokeLinecap="round" />
+              <circle cx="24" cy="23" r="3" fill="#0B132B" />
+            </svg>
+
+            <div className="text-left leading-none">
+              <div className="text-2xl font-black tracking-wider text-slate-900 font-sans">
+                UPES
+              </div>
+              <div className="text-[8px] font-bold tracking-widest text-slate-500 uppercase mt-0.5">
+                UNIVERSITY OF TOMORROW
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <h1 className="text-2xl font-serif text-[#1E3A8A] font-medium tracking-tight">
+              Placement Desk
+            </h1>
+            <p className="text-xs text-slate-500 mt-1 font-normal">
+              UPES Career Services placement operations
+            </p>
+          </div>
+        </div>
+
+        {/* Error Alert */}
+        {error && (
+          <div className="mb-5 bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3.5 py-2.5 rounded-lg flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Login Form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Username Field */}
+          <div className="space-y-1 text-left">
+            <label className="block text-xs font-semibold text-slate-600">
+              Username
+            </label>
+            <input
+              type="text"
+              required
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="e.g. Manash.29481@stu.upes.ac.in"
+              className="w-full px-3 py-2 text-sm bg-white border border-[#F59E0B] rounded-md outline-none text-slate-800 focus:ring-2 focus:ring-amber-400/40 focus:border-amber-600 transition-all font-medium"
+            />
+          </div>
+
+          {/* Password Field */}
+          <div className="space-y-1 text-left">
+            <label className="block text-xs font-semibold text-slate-600">
+              Password
+            </label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-md outline-none text-slate-800 focus:ring-2 focus:ring-amber-400/40 focus:border-amber-500 transition-all font-medium"
+            />
+          </div>
+
+          {/* Remember me & Portal label */}
+          <div className="flex items-center justify-between pt-1">
+            <label className="flex items-center space-x-2 cursor-pointer text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-400 cursor-pointer"
+              />
+              <span className="text-slate-500 text-xs">Remember me</span>
+            </label>
+
+            <span className="text-xs text-slate-400 font-medium">
+              UPES Placement Portal
+            </span>
+          </div>
+
+          {/* Submit Button matching Screenshot 1's warm sand/gold color */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-2 py-2.5 px-4 bg-[#E5BC7D] hover:bg-[#D4A85F] active:scale-[0.99] text-white font-bold text-sm rounded-md shadow-xs transition-all flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-75"
+          >
+            {loading ? (
+              <span className="inline-flex items-center space-x-2">
+                <span className="w-4 h-4 border-2 border-white/80 border-t-transparent rounded-full animate-spin" />
+                <span>Verifying credentials...</span>
+              </span>
+            ) : (
+              <span>Log in</span>
+            )}
+          </button>
+        </form>
+
+        {/* Notice text matching Screenshot 1 footer */}
+        <div className="text-center mt-4">
+          <p className="text-[11px] text-[#B91C1C] font-normal">
+            reCAPTCHA is not configured for this deployment.
+          </p>
+        </div>
+
+        {/* Quick Admin Credentials Switcher for Convenience */}
+        <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col items-center space-y-2">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Default Production Accounts
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
+            <button
+              type="button"
+              onClick={() => {
+                setUsername('Manash.29481@stu.upes.ac.in');
+                setPassword('Pass@123');
+              }}
+              className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-md font-bold transition-colors cursor-pointer"
+            >
+              Master Admin
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUsername('officer');
+                setPassword('Pass@123');
+              }}
+              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-medium transition-colors cursor-pointer"
+            >
+              Placement Officer
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUsername('spr');
+                setPassword('Pass@123');
+              }}
+              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md font-medium transition-colors cursor-pointer"
+            >
+              SPR Lead
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
