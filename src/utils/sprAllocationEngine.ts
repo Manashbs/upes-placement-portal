@@ -8,6 +8,19 @@ export interface AllocationDebugStep {
   score?: number;
 }
 
+/**
+ * Fair SPR Allocation Engine
+ * 
+ * Rules:
+ * 1. Date Conflict Prevention: If an SPR is already allotted to any process/round on the target date,
+ *    do not allot them to any other process/round on that date.
+ * 2. Duty Cycle & Balance:
+ *    - Maintain cycle order where every SPR gets a duty before a second duty is assigned.
+ *    - Prioritize SPRs with fewer total duties (totalDuties ascending).
+ *    - If an SPR cannot be allotted on date X (conflict or shortage), allot the next available SPR,
+ *      and prioritize the skipped SPR in the next process due to their lower duty count.
+ * 3. Cycle Advancement: When all available SPRs have served in the cycle, advance cycle and reset flags.
+ */
 export function allocateSPRsForRound(
   round: Round,
   countNeeded: number,
@@ -20,12 +33,17 @@ export function allocateSPRsForRound(
   cycleClosed: boolean;
 } {
   const debugLog: AllocationDebugStep[] = [];
-  const roundStartMs = new Date(`${round.date}T${round.startTime}`).getTime();
-  const roundEndMs = new Date(`${round.date}T${round.endTime}`).getTime();
+  const targetDate = (round.date || '').trim();
 
+  const roundStartMs = round.startTime ? new Date(`${targetDate}T${round.startTime}`).getTime() : 0;
+  const roundEndMs = round.endTime ? new Date(`${targetDate}T${round.endTime}`).getTime() : 0;
+
+  // Evaluate SPR eligibility
   const evaluateSprs = (sprList: SPR[], allowUsedInCycle: boolean) => {
-    const pool: { spr: SPR; score: number }[] = [];
-    for (const spr of sprList) {
+    const eligible: { spr: SPR; originalIndex: number }[] = [];
+
+    sprList.forEach((spr, idx) => {
+      // 1. Cycle usage check
       if (!allowUsedInCycle && spr.usedInCurrentCycle) {
         debugLog.push({
           sprId: spr.id,
@@ -33,14 +51,14 @@ export function allocateSPRsForRound(
           status: 'EXCLUDED_USED_IN_CYCLE',
           reason: `Already performed duty in Cycle #${currentCycle.id}`,
         });
-        continue;
+        return;
       }
 
-      // Check explicit self-unavailability
+      // 2. Check explicit self-unavailability
       const isUnavailable = spr.unavailabilities?.some((un) => {
         const uFrom = new Date(un.fromDate).getTime();
         const uTo = new Date(un.toDate).getTime();
-        const rDate = new Date(round.date).getTime();
+        const rDate = new Date(targetDate).getTime();
         return rDate >= uFrom && rDate <= uTo;
       });
 
@@ -49,63 +67,95 @@ export function allocateSPRsForRound(
           sprId: spr.id,
           sprName: spr.name,
           status: 'EXCLUDED_UNAVAILABLE',
-          reason: 'Marked self as unavailable on calendar (Exam/Leave)',
+          reason: `Marked self as unavailable on calendar (Exam/Leave) on ${targetDate}`,
         });
-        continue;
+        return;
       }
 
-      // Check overlapping round assignments
-      const hasOverlap = existingRounds.some((r) => {
+      // 3. Strict same-date conflict check across other processes & rounds
+      const hasDateConflict = existingRounds.some((r) => {
         if (r.id === round.id || !r.assignedSprIds?.includes(spr.id)) return false;
-        const rStart = new Date(`${r.date}T${r.startTime}`).getTime();
-        const rEnd = new Date(`${r.date}T${r.endTime}`).getTime();
-        return roundStartMs < rEnd && roundEndMs > rStart;
+        
+        // Exact same date match -> STRICT CONFLICT: do not allot duty on same date
+        if (r.date && targetDate && r.date.trim() === targetDate) {
+          return true;
+        }
+
+        // Overlapping time window if dates overlap or match
+        if (roundStartMs && roundEndMs && r.startTime && r.endTime) {
+          const rStart = new Date(`${r.date}T${r.startTime}`).getTime();
+          const rEnd = new Date(`${r.date}T${r.endTime}`).getTime();
+          if (!isNaN(rStart) && !isNaN(rEnd) && !isNaN(roundStartMs) && !isNaN(roundEndMs)) {
+            return roundStartMs < rEnd && roundEndMs > rStart;
+          }
+        }
+
+        return false;
       });
 
-      if (hasOverlap) {
+      if (hasDateConflict) {
         debugLog.push({
           sprId: spr.id,
           sprName: spr.name,
           status: 'EXCLUDED_OVERLAP',
-          reason: 'Assigned to another overlapping round at this venue/time',
+          reason: `Already allotted to another placement process round on ${targetDate}`,
         });
-        continue;
+        return;
       }
 
-      // Soft ranking score: lower total duties = higher score priority
-      const score = 100 - spr.totalDuties * 5 + Math.random() * 2;
-      pool.push({ spr, score });
+      eligible.push({ spr, originalIndex: idx });
       debugLog.push({
         sprId: spr.id,
         sprName: spr.name,
         status: 'QUALIFIED',
-        reason: `Eligible. Total duties so far: ${spr.totalDuties}. Score: ${score.toFixed(1)}`,
-        score,
+        reason: `Eligible for duty on ${targetDate}. Total duties so far: ${spr.totalDuties}`,
       });
-    }
-    return pool;
+    });
+
+    return eligible;
   };
 
-  // Pass 1: Try with current cycle unused SPRs
-  let candidatePool = evaluateSprs(allSprs, false);
-  candidatePool.sort((a, b) => b.score - a.score);
+  // Sort eligible candidates by fairness:
+  // 1. SPRs with fewest totalDuties first (ascending)
+  // 2. Used in cycle status (unused first)
+  // 3. Original roster order (preserves orderly round-robin queue)
+  const sortCandidates = (items: { spr: SPR; originalIndex: number }[]) => {
+    return items.sort((a, b) => {
+      // Fewest duties first
+      if (a.spr.totalDuties !== b.spr.totalDuties) {
+        return a.spr.totalDuties - b.spr.totalDuties;
+      }
+      // Unused in cycle first
+      if (a.spr.usedInCurrentCycle !== b.spr.usedInCurrentCycle) {
+        return a.spr.usedInCurrentCycle ? 1 : -1;
+      }
+      // Stable roster order
+      return a.originalIndex - b.originalIndex;
+    });
+  };
 
-  let selectedSprs = candidatePool.slice(0, countNeeded).map((item) => item.spr);
+  // Pass 1: Try with SPRs unused in the current cycle
+  let eligiblePool = evaluateSprs(allSprs, false);
+  let sortedPool = sortCandidates(eligiblePool);
+
+  let selectedSprs = sortedPool.slice(0, countNeeded).map((item) => item.spr);
   let cycleClosed = false;
 
-  // Pass 2: If we didn't reach countNeeded, reset cycle and grab additional SPRs from remaining pool
+  // Pass 2: If available unused SPRs in this cycle are fewer than needed,
+  // wrap/close the cycle and pick remaining from the remaining pool
   if (selectedSprs.length < countNeeded && allSprs.length > selectedSprs.length) {
     cycleClosed = true;
     const remainingNeeded = countNeeded - selectedSprs.length;
     const alreadySelectedIds = new Set(selectedSprs.map((s) => s.id));
     const unselectedSprs = allSprs.filter((s) => !alreadySelectedIds.has(s.id));
 
-    const extraPool = evaluateSprs(unselectedSprs, true);
-    extraPool.sort((a, b) => b.score - a.score);
+    const extraEligible = evaluateSprs(unselectedSprs, true);
+    const sortedExtra = sortCandidates(extraEligible);
 
-    const extraSelected = extraPool.slice(0, remainingNeeded).map((item) => item.spr);
+    const extraSelected = sortedExtra.slice(0, remainingNeeded).map((item) => item.spr);
     selectedSprs = [...selectedSprs, ...extraSelected];
   } else {
+    // Check if remaining eligible SPRs in current cycle are now 0
     const remainingInCycle = allSprs.filter(
       (s) => !s.usedInCurrentCycle && !selectedSprs.some((sel) => sel.id === s.id)
     );
@@ -118,32 +168,3 @@ export function allocateSPRsForRound(
     cycleClosed,
   };
 }
-
-export interface VenueSPRAllocation {
-  venue: string;
-  sprs: SPR[];
-}
-
-export function allocateSPRsVenueWise(
-  selectedSprs: SPR[],
-  venues: string[]
-): VenueSPRAllocation[] {
-  if (venues.length === 0) {
-    return [{ venue: 'Main Venue', sprs: selectedSprs }];
-  }
-
-  const result: VenueSPRAllocation[] = venues.map((v) => ({ venue: v, sprs: [] }));
-  const baseCount = Math.floor(selectedSprs.length / venues.length);
-  const remainder = selectedSprs.length % venues.length;
-
-  let index = 0;
-  for (let i = 0; i < venues.length; i++) {
-    const countForVenue = baseCount + (i < remainder ? 1 : 0);
-    const venueSprs = selectedSprs.slice(index, index + countForVenue);
-    result[i].sprs = venueSprs;
-    index += countForVenue;
-  }
-
-  return result;
-}
-

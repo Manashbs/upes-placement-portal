@@ -4,6 +4,9 @@ import { Check, Camera } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import jsQR from 'jsqr';
 
+import { validateQRToken } from '../../utils/qrUtils';
+import { recordAttendanceToCloud, fetchCloudAttendanceEvents } from '../../utils/cloudSync';
+
 export function parseScanUrlParams() {
   if (typeof window === 'undefined') return { roundId: '', sapId: '', candidateName: '', token: '' };
 
@@ -20,7 +23,7 @@ export function parseScanUrlParams() {
 
   return {
     roundId,
-    sapId,
+    sapId: String(sapId).trim(),
     candidateName: candidateName ? decodeURIComponent(candidateName) : '',
     token,
   };
@@ -29,15 +32,27 @@ export function parseScanUrlParams() {
 export const CandidateMobileScanView: React.FC = () => {
   const { rounds, students, roundStudents, markAttendance } = usePortal();
   const [params, setParams] = useState(parseScanUrlParams);
-  const [marked, setMarked] = useState(false);
+  const [justMarked, setJustMarked] = useState(false);
+  const [isCloudMarked, setIsCloudMarked] = useState(false);
+  const [mismatchError, setMismatchError] = useState<string | null>(null);
   const [cameraStatus, setCameraStatus] = useState<'STARTING' | 'ACTIVE' | 'ERROR'>('STARTING');
+  
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const isScanningRef = useRef(false);
+
+  // Dynamic references for scanning loop without causing re-renders or stream restarts
+  const paramsRef = useRef(params);
+  const cleanSapRef = useRef('');
+  const displayNameRef = useRef('');
+  const targetRoundRef = useRef<any>(null);
+  const roundDisplayNameRef = useRef('');
 
   useEffect(() => {
     const handleUrlChange = () => {
       setParams(parseScanUrlParams());
+      setMismatchError(null);
     };
     window.addEventListener('hashchange', handleUrlChange);
     window.addEventListener('popstate', handleUrlChange);
@@ -47,62 +62,142 @@ export const CandidateMobileScanView: React.FC = () => {
     };
   }, []);
 
-  const targetRound = rounds.find((r) => r.id === params.roundId) || rounds[0];
+  const cleanSap = String(params.sapId || '').trim();
 
-  // Lookup candidate name dynamically by SAP ID or URL parameter
-  const matchedStudent = students.find((s) => s.sapId === params.sapId);
+  // Find target round and student details
+  const targetRound = rounds.find((r) => r.id === params.roundId);
+  const roundDisplayName = targetRound
+    ? `${targetRound.companyName} · ${targetRound.name}`
+    : (params.roundId || 'Current Selection Round');
+
+  const matchedStudent = students.find((s) => String(s.sapId).trim() === cleanSap);
   const matchedRoundStudent = roundStudents.find(
-    (rs) => rs.sapId === params.sapId && (rs.roundId === params.roundId || !params.roundId)
+    (rs) => String(rs.sapId).trim() === cleanSap && rs.roundId === params.roundId
   );
 
   const displayName =
     params.candidateName ||
     matchedRoundStudent?.studentName ||
     matchedStudent?.name ||
-    (params.sapId ? `Candidate (${params.sapId})` : 'Student Candidate');
+    (cleanSap ? `Candidate (${cleanSap})` : 'Student Candidate');
 
-  const isAlreadyPresentInContext =
-    Boolean(params.sapId) &&
-    (matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
-      matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED');
+  const isAlreadyMarkedInRound =
+    Boolean(cleanSap) &&
+    (isCloudMarked ||
+      (Boolean(matchedRoundStudent) &&
+        (matchedRoundStudent?.attendanceStatus === 'PRESENT' ||
+          matchedRoundStudent?.attendanceStatus === 'MANUALLY_MARKED')));
 
-  const isPresent = marked || isAlreadyPresentInContext;
+  const isPresent = justMarked || isAlreadyMarkedInRound;
 
-  // Real-Time Camera Frame Scanning Loop via jsQR
+  // Keep refs in sync for the scan loop
   useEffect(() => {
-    if (isPresent) return;
+    paramsRef.current = params;
+    cleanSapRef.current = cleanSap;
+    displayNameRef.current = displayName;
+    targetRoundRef.current = targetRound;
+    roundDisplayNameRef.current = roundDisplayName;
+  }, [params, cleanSap, displayName, targetRound, roundDisplayName]);
 
-    let animationFrameId: number;
-    let currentStream: MediaStream | null = null;
-    let isSubscribed = true;
+  // Check cloud registry on load to see if already verified
+  useEffect(() => {
+    let active = true;
+    async function checkCloudStatus() {
+      if (!cleanSap || !params.roundId) return;
+      try {
+        const events = await fetchCloudAttendanceEvents();
+        const found = events.some(
+          (e) => e.roundId === params.roundId && String(e.sapId).trim() === cleanSap
+        );
+        if (found && active) {
+          setIsCloudMarked(true);
+        }
+      } catch {}
+    }
+    checkCloudStatus();
+    return () => {
+      active = false;
+    };
+  }, [cleanSap, params.roundId]);
 
-    async function startCameraAndScan() {
+  // 1. Stable Camera Stream Lifecycle (runs ONCE, never flickers or repeatedly restarts)
+  useEffect(() => {
+    if (isPresent) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      isScanningRef.current = false;
+      return;
+    }
+
+    let isMounted = true;
+
+    async function startCamera() {
+      // If camera is already active, don't re-create stream
+      if (streamRef.current && streamRef.current.active) {
+        if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+        }
+        return;
+      }
+
       try {
         setCameraStatus('STARTING');
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 640 },
+            height: { ideal: 640 },
+          },
+          audio: false,
         });
 
-        if (isSubscribed && videoRef.current) {
-          videoRef.current.srcObject = stream;
-          currentStream = stream;
-          setCameraStatus('ACTIVE');
-          isScanningRef.current = true;
-          animationFrameId = requestAnimationFrame(scanFrame);
+        if (!isMounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
         }
-      } catch {
-        if (isSubscribed) {
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute('playsinline', 'true');
+          await videoRef.current.play().catch(() => {});
+        }
+        setCameraStatus('ACTIVE');
+        isScanningRef.current = true;
+      } catch (err) {
+        if (isMounted) {
           setCameraStatus('ERROR');
         }
       }
     }
 
+    startCamera();
+
+    return () => {
+      isMounted = false;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      isScanningRef.current = false;
+    };
+  }, [isPresent]);
+
+  // 2. Smooth Scanning Loop with 100ms throttle (zero lag, no stream interruptions)
+  useEffect(() => {
+    if (isPresent) return;
+
+    let scanTimerId: any;
+    let isMounted = true;
+
     const scanFrame = () => {
-      if (!isScanningRef.current) return;
+      if (!isMounted || !isScanningRef.current) return;
 
       const video = videoRef.current;
 
-      if (video && video.readyState === video.HAVE_ENOUGH_DATA) {
+      if (video && video.readyState >= 2 && video.videoWidth > 0) {
         if (!canvasRef.current) {
           canvasRef.current = document.createElement('canvas');
         }
@@ -123,65 +218,100 @@ export const CandidateMobileScanView: React.FC = () => {
 
           if (code && code.data) {
             const scannedText = code.data;
+            const tokenCheck = validateQRToken(scannedText);
+            const curParams = paramsRef.current;
+            const curRound = targetRoundRef.current;
+            const curSap = cleanSapRef.current;
+            const curName = displayNameRef.current;
 
-            const isValidQR =
-              scannedText.includes('UPES-SEC') ||
-              scannedText.includes(params.roundId) ||
-              scannedText.length > 6;
+            // Verify if scanned QR corresponds to the round in the candidate's link
+            const isMatchingRound =
+              (tokenCheck.data?.roundId && tokenCheck.data.roundId === curParams.roundId) ||
+              scannedText === curRound?.qrToken ||
+              (Boolean(curParams.roundId) && scannedText.includes(curParams.roundId)) ||
+              (tokenCheck.valid && !tokenCheck.data?.roundId);
 
-            if (isValidQR) {
+            if (isMatchingRound && curSap && curParams.roundId) {
               isScanningRef.current = false;
-              markAttendance(params.roundId || 'rnd-1', params.sapId || '500123174', 'REAL_CAMERA_QR_SCAN', displayName);
-              setMarked(true);
-              confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+              const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-              if (currentStream) {
-                currentStream.getTracks().forEach((track) => track.stop());
+              // 1. Mark locally
+              markAttendance(curParams.roundId, curSap, 'REAL_CAMERA_QR_SCAN', curName);
+
+              // 2. Publish to Cloud Sync (instantly updates recruiter dashboard in real-time)
+              recordAttendanceToCloud({
+                roundId: curParams.roundId,
+                sapId: curSap,
+                studentName: curName,
+                status: 'PRESENT',
+                time: nowTime,
+                method: 'REAL_CAMERA_QR_SCAN',
+              });
+
+              // 3. Update UI & trigger celebratory confetti
+              setJustMarked(true);
+              setMismatchError(null);
+              confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+
+              // 4. Turn off camera
+              if (streamRef.current) {
+                streamRef.current.getTracks().forEach((track) => track.stop());
+                streamRef.current = null;
               }
               return;
+            } else if (tokenCheck.data?.roundId && tokenCheck.data.roundId !== curParams.roundId) {
+              setMismatchError(
+                `Scanned QR belongs to "${tokenCheck.data.companyName} · ${tokenCheck.data.roundName}". Please scan the QR code for "${roundDisplayNameRef.current}".`
+              );
             }
           }
         }
       }
 
-      animationFrameId = requestAnimationFrame(scanFrame);
+      scanTimerId = setTimeout(scanFrame, 100);
     };
 
-    startCameraAndScan();
+    scanTimerId = setTimeout(scanFrame, 400);
 
     return () => {
-      isSubscribed = false;
-      isScanningRef.current = false;
-      if (animationFrameId) cancelAnimationFrame(animationFrameId);
-      if (currentStream) {
-        currentStream.getTracks().forEach((track) => track.stop());
-      }
+      isMounted = false;
+      if (scanTimerId) clearTimeout(scanTimerId);
     };
-  }, [isPresent, params.roundId, params.sapId, displayName, markAttendance]);
+  }, [isPresent, markAttendance]);
 
   return (
     <div className="min-h-screen w-full bg-[#EEF2F6] flex flex-col items-center justify-center p-4 font-sans select-none relative overflow-hidden">
       {/* Hidden canvas for video frame extraction */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Background Geometric Pattern Tiles */}
+      {/* Background Geometric Pattern */}
       <div className="absolute inset-0 opacity-40 pointer-events-none bg-[radial-gradient(#CBD5E1_1.5px,transparent_1.5px)] [background-size:20px_20px]" />
 
       <div className="relative w-full max-w-sm mx-auto my-auto">
         {!isPresent ? (
-          /* Screenshot 1: Camera Scanning Mode (NO manual button) */
+          /* Camera Scanning Mode */
           <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-100/80 space-y-4 animate-in fade-in duration-200">
             <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 mb-1">
+                {roundDisplayName}
+              </div>
               <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight mb-2">
-                Placement process
+                Placement Process
               </h2>
               <p className="text-xs text-slate-600 font-sans leading-relaxed">
-                Hello <strong className="text-slate-900 font-semibold">{displayName}</strong>. Point your camera at the venue Security QR code to verify attendance.
+                Hello <strong className="text-slate-900 font-semibold">{displayName}</strong> {cleanSap ? `(${cleanSap})` : ''}. Point your camera at the venue Security QR code to record your attendance.
               </p>
             </div>
 
+            {/* Error banner if scanned wrong QR */}
+            {mismatchError && (
+              <div className="bg-rose-50 border border-rose-200 text-rose-800 p-3 rounded-2xl text-xs font-semibold leading-relaxed">
+                ⚠️ {mismatchError}
+              </div>
+            )}
+
             {/* Video Camera Container Frame */}
-            <div className="relative w-full aspect-square bg-[#0F172A] rounded-2xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center my-4">
+            <div className="relative w-full aspect-square bg-[#0F172A] rounded-2xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center my-3">
               <video
                 ref={videoRef}
                 autoPlay
@@ -205,42 +335,129 @@ export const CandidateMobileScanView: React.FC = () => {
 
               {cameraStatus === 'ERROR' && (
                 <div className="absolute inset-0 bg-slate-900 p-4 flex flex-col items-center justify-center text-center space-y-2">
-                  <Camera className="w-8 h-8 text-amber-400 opacity-80" />
-                  <p className="text-xs text-slate-300">Allow camera permission to scan venue Security QR Code.</p>
+                  <Camera className="w-8 h-8 text-rose-400 opacity-90" />
+                  <p className="text-xs text-slate-200 font-medium">Camera access required</p>
+                  <p className="text-[11px] text-slate-400 max-w-xs leading-relaxed">
+                    Please allow camera permissions in your browser to scan the venue Security QR code.
+                  </p>
                 </div>
               )}
             </div>
 
-            <p className="text-xs font-serif italic text-slate-500 text-left">
-              {cameraStatus === 'ACTIVE' ? 'Camera active · Point camera at venue Security QR to mark attendance...' : 'Starting camera...'}
-            </p>
+            {/* Scanner Guidance Footer */}
+            <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center space-x-3 text-left">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping flex-shrink-0" />
+              <div className="text-[11px] text-slate-600 font-sans leading-tight">
+                <span className="font-semibold text-slate-800">Scanner active:</span> Hold your phone steady and align the venue Security QR code inside the frame.
+              </div>
+            </div>
           </div>
-        ) : (
-          /* Screenshot 2: Already Marked / Attendance Confirmation Mode */
-          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-100/80 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
-            <div className="text-left border-b border-slate-100 pb-4">
-              <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight mb-1">
-                Placement process
+        ) : justMarked ? (
+          /* Success: Just Marked Right Now */
+          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-emerald-100 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="text-left border-b border-slate-100 pb-3">
+              <div className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-600 mb-1">
+                {roundDisplayName}
+              </div>
+              <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight">
+                Attendance Recorded
               </h2>
-              <p className="text-xs text-slate-500 font-sans">
-                Attendance confirmation
+            </div>
+
+            {/* Celebratory Icon */}
+            <div className="py-2 space-y-3">
+              <div className="w-16 h-16 rounded-full bg-emerald-500 text-white flex items-center justify-center mx-auto shadow-lg shadow-emerald-500/30 animate-bounce">
+                <Check className="w-10 h-10 stroke-[3]" />
+              </div>
+
+              <h3 className="text-xl font-extrabold text-slate-900">
+                Attendance Marked Successfully!
+              </h3>
+              <p className="text-xs text-slate-500">
+                Your presence has been recorded in the live recruitment roster.
               </p>
             </div>
 
-            {/* Ticket Badge & Icon */}
-            <div className="py-2 space-y-4">
+            {/* Candidate Details Card */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2 text-left text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Candidate:</span>
+                <span className="font-bold text-slate-900">{displayName}</span>
+              </div>
+              {cleanSap && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-medium">SAP ID:</span>
+                  <span className="font-mono font-bold text-slate-900">{cleanSap}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Round:</span>
+                <span className="font-bold text-slate-900">{roundDisplayName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Status:</span>
+                <span className="font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                  ✓ PRESENT
+                </span>
+              </div>
+            </div>
+
+            {/* Verification Banner */}
+            <div className="w-full bg-[#20F090] text-slate-950 font-extrabold text-xs py-3.5 px-4 rounded-2xl shadow-xs leading-snug">
+              ✓ Verified via Real-Time Venue Security QR Scan
+            </div>
+          </div>
+        ) : (
+          /* Already Marked Earlier */
+          <div className="bg-white rounded-3xl p-6 md:p-8 shadow-2xl border border-slate-100/80 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="text-left border-b border-slate-100 pb-3">
+              <div className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 mb-1">
+                {roundDisplayName}
+              </div>
+              <h2 className="text-2xl font-serif font-normal text-[#1E2B3C] tracking-tight">
+                Attendance Status
+              </h2>
+            </div>
+
+            {/* Already Marked Icon */}
+            <div className="py-2 space-y-3">
               <div className="w-14 h-14 rounded-full bg-[#B38728] text-white flex items-center justify-center mx-auto shadow-sm">
                 <Check className="w-8 h-8 stroke-[3]" />
               </div>
 
-              <h3 className="text-xl font-serif font-normal text-[#1E2B3C]">
-                Already marked
+              <h3 className="text-xl font-extrabold text-slate-900">
+                Attendance Already Recorded
               </h3>
+              <p className="text-xs text-slate-500">
+                You have already marked your attendance for this round.
+              </p>
             </div>
 
-            {/* Lime Green Banner */}
+            {/* Details Card */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-2 text-left text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Candidate:</span>
+                <span className="font-bold text-slate-900">{displayName}</span>
+              </div>
+              {cleanSap && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-medium">SAP ID:</span>
+                  <span className="font-mono font-bold text-slate-900">{cleanSap}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Round:</span>
+                <span className="font-bold text-slate-900">{roundDisplayName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400 font-medium">Marked At:</span>
+                <span className="font-mono font-bold text-slate-900">{matchedRoundStudent?.attendanceTime || 'Earlier'}</span>
+              </div>
+            </div>
+
+            {/* Banner */}
             <div className="w-full bg-[#20F090] text-slate-950 font-extrabold text-xs py-3.5 px-4 rounded-2xl shadow-xs leading-snug">
-              ✓ Attendance Verified for {displayName} {params.sapId ? `(${params.sapId})` : ''}
+              ✓ Attendance Verified for {displayName} {cleanSap ? `(${cleanSap})` : ''}
             </div>
           </div>
         )}

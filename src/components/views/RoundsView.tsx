@@ -1,26 +1,32 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2, ChevronRight, UserPlus, Sparkles } from 'lucide-react';
+import { Calendar, MapPin, Filter, QrCode, FileSpreadsheet, Plus, Users, Building2, ChevronRight, Trash2 } from 'lucide-react';
 import { Round, RoundType, RoundMode } from '../../types';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { RoundDetailsModal } from '../modals/RoundDetailsModal';
-import { AddExtraSPRModal } from '../modals/AddExtraSPRModal';
 import { exportRosterExcel } from '../../utils/excelUtils';
 
 export const RoundsView: React.FC = () => {
-  const { rounds, companies, createRound, uploadShortlistForRound, roundStudents } = usePortal();
+  const { rounds, companies, createRound, uploadShortlistForRound, deleteRound, roundStudents } = usePortal();
   const [activeTab, setActiveTab] = useState<'ALL' | 'LIVE' | 'UPCOMING' | 'COMPLETED'>('ALL');
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
-  const [selectedRoundForExtraSPR, setSelectedRoundForExtraSPR] = useState<Round | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
 
+  const activeRoundDetails = selectedRoundForDetails
+    ? rounds.find((r) => r.id === selectedRoundForDetails.id) || selectedRoundForDetails
+    : null;
+
+  const activeRoundQR = selectedRoundForQR
+    ? rounds.find((r) => r.id === selectedRoundForQR.id) || selectedRoundForQR
+    : null;
 
   // New Round Form state
-  const [companyId, setCompanyId] = useState(companies[0]?.id || 'comp-1');
+  const [companyId, setCompanyId] = useState(companies[0]?.id || '');
+  const [companyError, setCompanyError] = useState<string | null>(null);
   const [roundName, setRoundName] = useState('');
   const [roundType, setRoundType] = useState<RoundType>('TECHNICAL_INTERVIEW');
   const [roundMode, setRoundMode] = useState<RoundMode>('ON_CAMPUS');
@@ -33,14 +39,20 @@ export const RoundsView: React.FC = () => {
   // Total SPRs needed
   const [sprsNeeded, setSprsNeeded] = useState<number>(3);
   const [shortlistedStudentsTemp, setShortlistedStudentsTemp] = useState<any[]>([]);
+  const [createRoundId, setCreateRoundId] = useState<string>(() => `rnd-${Date.now()}`);
+  const [createRoundSessionId, setCreateRoundSessionId] = useState<string>(
+    () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
+  );
 
-  const filteredRounds = rounds.filter((r) => {
-    if (activeTab === 'ALL') return true;
-    if (activeTab === 'LIVE') return r.status === 'IN_PROGRESS';
-    if (activeTab === 'UPCOMING') return r.status === 'SCHEDULED';
-    if (activeTab === 'COMPLETED') return r.status === 'COMPLETED';
-    return true;
-  });
+  const filteredRounds = rounds
+    .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+    .filter((r) => {
+      if (activeTab === 'ALL') return true;
+      if (activeTab === 'LIVE') return r.status === 'IN_PROGRESS';
+      if (activeTab === 'UPCOMING') return r.status === 'SCHEDULED';
+      if (activeTab === 'COMPLETED') return r.status === 'COMPLETED';
+      return true;
+    });
 
   const handleTotalVenuesChange = (count: number) => {
     const validCount = Math.max(1, Math.min(10, count));
@@ -78,13 +90,23 @@ export const RoundsView: React.FC = () => {
   };
 
   const handleFinalizeCreateRound = () => {
+    if (!companyId || !companies.some((c) => c.id === companyId)) {
+      setCompanyError('Target Company is mandatory. Please select a registered company.');
+      return;
+    }
     const targetComp = companies.find((c) => c.id === companyId);
+    if (!targetComp) {
+      setCompanyError('Selected target company does not exist.');
+      return;
+    }
+
     const combinedVenueString = venuesList.filter(Boolean).join(' | ');
 
     createRound(
       {
-        companyId,
-        companyName: targetComp?.name || 'Company',
+        id: createRoundId,
+        companyId: targetComp.id,
+        companyName: targetComp.name,
         name: roundName || `${roundType} Round`,
         type: roundType,
         mode: roundMode,
@@ -95,19 +117,13 @@ export const RoundsView: React.FC = () => {
         endTime: '17:00',
         sprsNeeded,
       },
-      shortlistedStudentsTemp
+      shortlistedStudentsTemp,
+      createRoundSessionId
     );
     setShowCreateModal(false);
     setShortlistedStudentsTemp([]);
-
-    // Open extra SPR allotment modal immediately after creation for user choice
-    setTimeout(() => {
-      if (rounds && rounds.length > 0) {
-        setSelectedRoundForExtraSPR(rounds[0]);
-      }
-    }, 200);
+    setCompanyError(null);
   };
-
 
   return (
     <div className="space-y-8 select-none pb-12">
@@ -115,20 +131,24 @@ export const RoundsView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase mb-1">
-            PROCESS & ATTENDANCE MANAGEMENT
+            OPERATIONS CALENDAR
           </div>
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">
-            Process & Attendance
+            Rounds
           </h2>
           <p className="text-sm font-medium text-slate-500 max-w-3xl">
-            Schedule placement drive rounds, configure venue distribution, mark candidate attendance, and manage SPR duty allocations.
+            The operating calendar for every assessment, interview, and recruiter touchpoint.
           </p>
-
         </div>
 
         <div className="flex items-center space-x-3">
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => {
+              setCreateRoundId(`rnd-${Date.now()}`);
+              setCreateRoundSessionId(`ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`);
+              setShortlistedStudentsTemp([]);
+              setShowCreateModal(true);
+            }}
             className="inline-flex items-center space-x-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-sm font-extrabold px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
@@ -180,10 +200,14 @@ export const RoundsView: React.FC = () => {
       {/* List of Round Cards */}
       <div className="space-y-4">
         {filteredRounds.map((round) => {
-          const currentStudents = roundStudents.filter((rs) => rs.roundId === round.id);
           const isLive = round.status === 'IN_PROGRESS';
           const isCompleted = round.status === 'COMPLETED';
-          const attendedRatio = round.attendedCount / (round.totalShortlisted || 1);
+          const currentStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+          const presentCount = currentStudents.filter(
+            (rs) => rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED'
+          ).length;
+          const totalStudentsCount = Math.max(currentStudents.length, round.totalShortlisted || 0);
+          const attendedRatio = totalStudentsCount > 0 ? presentCount / totalStudentsCount : 0;
 
           const accentColor = isLive
             ? 'bg-blue-600'
@@ -247,7 +271,7 @@ export const RoundsView: React.FC = () => {
               <div className="space-y-1.5 min-w-[140px]">
                 <span className="text-[11px] font-semibold text-slate-400 block">Attendance</span>
                 <div className="text-sm font-extrabold text-slate-900">
-                  {round.attendedCount}/{round.totalShortlisted}
+                  {Math.max(presentCount, round.attendedCount || 0)}/{totalStudentsCount}
                 </div>
                 <div className="h-1.5 w-28 bg-slate-100 rounded-full overflow-hidden">
                   <div
@@ -261,17 +285,6 @@ export const RoundsView: React.FC = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedRoundForExtraSPR(round);
-                  }}
-                  className="p-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold transition-colors cursor-pointer border border-amber-200"
-                  title="Allot Extra SPRs (Manual Choice or System Random)"
-                >
-                  <UserPlus className="w-4 h-4 text-amber-600" />
-                </button>
-
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
                     setSelectedRoundForQR(round);
                   }}
                   className="p-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold transition-colors cursor-pointer"
@@ -279,7 +292,6 @@ export const RoundsView: React.FC = () => {
                 >
                   <QrCode className="w-4 h-4 text-amber-600" />
                 </button>
-
 
                 <button
                   onClick={(e) => {
@@ -303,6 +315,19 @@ export const RoundsView: React.FC = () => {
                 >
                   <FileSpreadsheet className="w-4 h-4 text-blue-600" />
                 </button>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Delete round "${round.companyName} · ${round.name}"? This will remove all attendance data for this round.`)) {
+                      deleteRound(round.id);
+                    }
+                  }}
+                  className="p-2.5 rounded-xl bg-slate-50 hover:bg-red-50 text-slate-400 hover:text-red-600 font-bold transition-colors cursor-pointer"
+                  title="Delete Round"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             </div>
           );
@@ -320,16 +345,37 @@ export const RoundsView: React.FC = () => {
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Target Company</label>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Target Company <span className="text-rose-600 font-extrabold">* (Mandatory)</span>
+                </label>
                 <select
+                  required
                   value={companyId}
-                  onChange={(e) => setCompanyId(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                  onChange={(e) => {
+                    setCompanyId(e.target.value);
+                    setCompanyError(null);
+                  }}
+                  className={`w-full bg-slate-50 border rounded-xl p-2.5 font-bold outline-none transition-all ${
+                    companyError || !companyId
+                      ? 'border-rose-400 ring-2 ring-rose-100'
+                      : 'border-slate-200 focus:border-amber-500'
+                  }`}
                 >
+                  <option value="" disabled>-- Select Target Company (Required) --</option>
                   {companies.map((c) => (
                     <option key={c.id} value={c.id}>{c.name} ({c.category})</option>
                   ))}
                 </select>
+                {companies.length === 0 && (
+                  <p className="text-[11px] text-rose-600 font-semibold mt-1">
+                    ⚠️ No companies registered yet. Please create a company first in the Companies tab.
+                  </p>
+                )}
+                {companyError && (
+                  <p className="text-[11px] text-rose-600 font-bold mt-1">
+                    {companyError}
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -486,7 +532,8 @@ export const RoundsView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleFinalizeCreateRound}
-                  className="px-5 py-2.5 bg-[#0B132B] text-white font-bold rounded-xl shadow-md cursor-pointer"
+                  disabled={!companyId || companies.length === 0}
+                  className="px-5 py-2.5 bg-[#0B132B] hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-md cursor-pointer transition-all"
                 >
                   Create & Launch Selection Round
                 </button>
@@ -498,7 +545,7 @@ export const RoundsView: React.FC = () => {
 
       {/* Round Details & SPR Allocation Modal */}
       <RoundDetailsModal
-        round={selectedRoundForDetails}
+        round={activeRoundDetails}
         onClose={() => setSelectedRoundForDetails(null)}
         onOpenQRModal={(r) => setSelectedRoundForQR(r)}
         onOpenUploadModal={(r) => {
@@ -508,7 +555,7 @@ export const RoundsView: React.FC = () => {
       />
 
       {/* QR Control Modal */}
-      <RoundQRControlModal round={selectedRoundForQR} onClose={() => setSelectedRoundForQR(null)} />
+      <RoundQRControlModal round={activeRoundQR} onClose={() => setSelectedRoundForQR(null)} />
 
       {/* Excel Upload Modal */}
       <ExcelUploadModal
@@ -517,27 +564,20 @@ export const RoundsView: React.FC = () => {
           setShowExcelUpload(false);
           setSelectedRoundForUpload(null);
         }}
-        targetRoundId={selectedRoundForUpload?.id}
-        companyName={selectedRoundForUpload?.companyName}
-        roundName={selectedRoundForUpload?.name}
-        onShortlistValidated={(validStudents) => {
+        targetRoundId={selectedRoundForUpload?.id || createRoundId}
+        companyName={selectedRoundForUpload?.companyName || companies.find((c) => c.id === companyId)?.name}
+        roundName={selectedRoundForUpload?.name || roundName || 'Shortlist'}
+        onShortlistValidated={(validStudents, sessionId) => {
           if (selectedRoundForUpload) {
-            uploadShortlistForRound(selectedRoundForUpload.id, validStudents);
+            uploadShortlistForRound(selectedRoundForUpload.id, validStudents, sessionId);
             setSelectedRoundForUpload(null);
           } else {
             setShortlistedStudentsTemp(validStudents);
+            if (sessionId) setCreateRoundSessionId(sessionId);
           }
           setShowExcelUpload(false);
         }}
       />
-
-      {/* Add Extra SPR Modal */}
-      <AddExtraSPRModal
-        isOpen={!!selectedRoundForExtraSPR}
-        onClose={() => setSelectedRoundForExtraSPR(null)}
-        round={selectedRoundForExtraSPR}
-      />
     </div>
   );
 };
-

@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { usePortal } from '../../context/PortalContext';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, ArrowRight, Sparkles, Download } from 'lucide-react';
-import { parseShortlistExcel, FuzzyParseResult, exportAnnotatedAttendanceExcel } from '../../utils/excelUtils';
+import { parseShortlistExcel, FuzzyParseResult, exportOriginalSheetWithAttendanceLinks, exportExactSheetWithAttendance } from '../../utils/excelUtils';
+import { saveSheetToStorage } from '../../utils/sheetStorage';
 import { Student, RoundStudent } from '../../types';
 
 interface ExcelUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onShortlistValidated: (students: Student[]) => void;
+  onShortlistValidated: (students: Student[], sessionId?: string) => void;
   targetRoundId?: string;
   companyName?: string;
   roundName?: string;
@@ -21,10 +22,14 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
   companyName,
   roundName,
 }) => {
-  const { students, resolveUnknownSapIds } = usePortal();
+  const { students, resolveUnknownSapIds, storeOriginalExcel } = usePortal();
   const [parseResult, setParseResult] = useState<FuzzyParseResult | null>(null);
   const [fileName, setFileName] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [rawFileBuffer, setRawFileBuffer] = useState<ArrayBuffer | null>(null);
+  const [uploadSessionId] = useState<string>(
+    () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
+  );
 
   if (!isOpen) return null;
 
@@ -38,15 +43,29 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     const reader = new FileReader();
     reader.onload = (evt) => {
       const buffer = evt.target?.result as ArrayBuffer;
+      setRawFileBuffer(buffer);
       const result = parseShortlistExcel(buffer, students);
       setParseResult(result);
       setIsProcessing(false);
+
+      // Immediately persist original sheet buffer and metadata to multi-layer storage
+      const roundKey = targetRoundId || `rnd-${Date.now()}`;
+      const meta = result.headerRow && result.rawRows ? { headers: result.headerRow, rows: result.rawRows } : undefined;
+      storeOriginalExcel(roundKey, buffer, meta);
+      saveSheetToStorage(roundKey, buffer, meta, file.name);
     };
     reader.readAsArrayBuffer(file);
   };
 
   const getValidStudentsFromParse = () => {
     if (!parseResult) return { createdStudents: [], allValid: [] };
+
+    // Candidates extracted from the sheet — ensure sapId is exactly from the sheet
+    const allValid: Student[] = parseResult.matchedStudents.map((m) => ({
+      ...m.student,
+      sapId: m.recruiterData.candidateId || m.recruiterData.applicantId || m.student.sapId,
+      name: m.recruiterData.rawName || m.student.name,
+    }));
 
     const createdStudents: Student[] = parseResult.unmatchedRows.map((u, i) => ({
       id: `st-new-${Date.now()}-${i}`,
@@ -64,12 +83,27 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       status: 'ELIGIBLE',
     }));
 
-    const allValid = [
-      ...parseResult.matchedStudents.map((m) => m.student),
-      ...createdStudents,
-    ];
+    const finalStudents = allValid.length > 0 ? allValid : createdStudents;
 
-    return { createdStudents, allValid };
+    return { createdStudents: finalStudents, allValid: finalStudents };
+  };
+
+  const handleDownloadOriginalWithLinks = () => {
+    if (!rawFileBuffer || !parseResult) return;
+
+    const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
+
+    // Use the original-preserving function that appends Attendance Link at the very end with unique session ID
+    exportOriginalSheetWithAttendanceLinks(
+      rawFileBuffer,
+      roundIdForLink,
+      companyName || 'Recruiter',
+      roundName || 'Shortlist',
+      parseResult.matchedStudents,
+      parseResult.unmatchedRows,
+      students,
+      uploadSessionId
+    );
   };
 
   const handleDownloadAnnotatedExcel = () => {
@@ -90,11 +124,15 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       panelNumber: `Panel ${(i % 4) + 1}`,
     }));
 
-    exportAnnotatedAttendanceExcel(
+    exportExactSheetWithAttendance(
+      roundIdForLink,
       companyName || 'Recruiter',
       roundName || 'Shortlist',
-      roundIdForLink,
-      roundStudentsForExport
+      roundStudentsForExport,
+      students,
+      'xlsx',
+      rawFileBuffer || undefined,
+      parseResult?.headerRow && parseResult?.rawRows ? { headers: parseResult.headerRow, rows: parseResult.rawRows } : undefined
     );
   };
 
@@ -107,10 +145,21 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
       resolveUnknownSapIds(createdStudents);
     }
 
-    // Auto export annotated Excel with attendance roster links right after uploading!
-    handleDownloadAnnotatedExcel();
+    // Store the original Excel file buffer and raw rows in context & persistent storage
+    const roundIdForLink = targetRoundId || `rnd-${Date.now()}`;
+    if (rawFileBuffer) {
+      const meta = parseResult.headerRow && parseResult.rawRows
+        ? { headers: parseResult.headerRow, rows: parseResult.rawRows }
+        : undefined;
 
-    onShortlistValidated(allValid);
+      storeOriginalExcel(roundIdForLink, rawFileBuffer, meta);
+      saveSheetToStorage(roundIdForLink, rawFileBuffer, meta, fileName);
+    }
+
+    // Auto-download the original sheet with attendance links appended
+    handleDownloadOriginalWithLinks();
+
+    onShortlistValidated(allValid, uploadSessionId);
     onClose();
   };
 
@@ -202,16 +251,16 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
 
             <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
               <button
-                onClick={handleDownloadAnnotatedExcel}
+                onClick={handleDownloadOriginalWithLinks}
                 className="inline-flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold px-3.5 py-2 rounded-xl transition-all cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Download Roster with Attendance Links (.xlsx)</span>
+                <span>Download Original Sheet + Attendance Links</span>
               </button>
 
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => setParseResult(null)}
+                  onClick={() => { setParseResult(null); setRawFileBuffer(null); }}
                   className="px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
                   Upload Different File
@@ -231,3 +280,4 @@ export const ExcelUploadModal: React.FC<ExcelUploadModalProps> = ({
     </div>
   );
 };
+

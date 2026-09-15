@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { usePortal } from '../../context/PortalContext';
-import { Round } from '../../types';
-import { AddExtraSPRModal } from './AddExtraSPRModal';
+import { Round, RoundStudent } from '../../types';
 import {
   MapPin,
   Calendar,
@@ -16,10 +15,8 @@ import {
   Building2,
   UserCheck,
   ShieldCheck,
-  UserPlus,
-  Download,
 } from 'lucide-react';
-import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink } from '../../utils/excelUtils';
+import { exportExactSheetWithAttendance, generateCandidateAttendanceLink } from '../../utils/excelUtils';
 
 interface RoundDetailsModalProps {
   round: Round | null;
@@ -34,13 +31,28 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
   onOpenQRModal,
   onOpenUploadModal,
 }) => {
-  const { roundStudents, sprs, dutyAssignments, exportSPRDutiesReport } = usePortal();
-  const [showAddExtraModal, setShowAddExtraModal] = useState(false);
-
+  const { roundStudents, sprs, students, getOriginalExcel, getOriginalExcelRaw } = usePortal();
 
   if (!round) return null;
 
-  const currentRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+  const rawRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
+  const currentRoundStudents = Array.from(
+    rawRoundStudents.reduce((map, item) => {
+      const key = String(item.sapId).trim();
+      const existing = map.get(key);
+      if (!existing || item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED') {
+        map.set(key, item);
+      }
+      return map;
+    }, new Map<string, RoundStudent>()).values()
+  );
+
+  const presentCount = currentRoundStudents.filter(
+    (rs) => rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED'
+  ).length;
+  const totalStudentsCount = Math.max(currentRoundStudents.length, round.totalShortlisted || 0);
+  const absentCount = Math.max(0, totalStudentsCount - presentCount);
+  const attendancePercentage = totalStudentsCount > 0 ? Math.round((presentCount / totalStudentsCount) * 100) : 0;
 
   // Parse venues list from round.venue string (separated by | or comma)
   const venues = round.venue
@@ -144,46 +156,24 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Attendance Rate</span>
               <div className="text-xs font-extrabold text-emerald-600 mt-0.5">
-                {round.attendedCount}/{round.totalShortlisted || 0} ({Math.round(((round.attendedCount || 0) / (round.totalShortlisted || 1)) * 100)}%)
+                {presentCount}/{totalStudentsCount} ({attendancePercentage}%)
               </div>
             </div>
           </div>
 
-          {/* Venues & Equal Allocated SPRs Section */}
+          {/* Venues & Randomly Allocated SPRs Section */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <Building2 className="w-4 h-4 text-amber-500" />
                 <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
-                  Venues & Allocated SPR Representatives ({assignedSprsList.length} Total SPRs)
+                  Venues & Randomly Assigned SPR Representatives ({assignedSprsList.length} Total SPRs)
                 </h4>
               </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddExtraModal(true)}
-                  className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold text-[11px] px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>Allot Extra SPRs</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => exportSPRDutiesReport(round.id)}
-                  className="inline-flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-extrabold text-[11px] px-3 py-1.5 rounded-xl transition-all cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Download Duties (.xlsx)</span>
-                </button>
-
-                <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200">
-                  Equal Allocation ({venues.length} Venues)
-                </span>
-              </div>
+              <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                Equally Distributed Across {venues.length} Venues
+              </span>
             </div>
-
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {venueSPRMapping.map((vItem, vIdx) => (
@@ -248,7 +238,7 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
                 </h4>
               </div>
               <span className="text-[11px] font-extrabold text-slate-600">
-                Present: {round.attendedCount} | Absent: {round.absentCount}
+                Present: {presentCount} | Absent: {absentCount}
               </span>
             </div>
 
@@ -309,10 +299,23 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
         {/* Sticky Modal Action Buttons Footer */}
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 shrink-0 bg-slate-50/50">
           <button
-            onClick={() => exportAnnotatedAttendanceExcel(round.companyName, round.name, round.id, currentRoundStudents)}
-            className="inline-flex items-center space-x-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer"
+            onClick={() => {
+              const buffer = getOriginalExcel(round.id);
+              const rawMeta = getOriginalExcelRaw(round.id);
+              exportExactSheetWithAttendance(
+                round.id,
+                round.companyName,
+                round.name,
+                currentRoundStudents,
+                students,
+                'xlsx',
+                buffer,
+                rawMeta
+              );
+            }}
+            className="inline-flex items-center space-x-1.5 bg-[#0B132B] hover:bg-slate-800 text-white text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-md transition-all active:scale-95 cursor-pointer"
           >
-            <FileSpreadsheet className="w-4 h-4 text-blue-600" />
+            <FileSpreadsheet className="w-4 h-4 text-amber-400" />
             <span>Download Attendance Report (.xlsx)</span>
           </button>
 
@@ -352,13 +355,6 @@ export const RoundDetailsModal: React.FC<RoundDetailsModalProps> = ({
           </div>
         </div>
       </div>
-
-      <AddExtraSPRModal
-        isOpen={showAddExtraModal}
-        onClose={() => setShowAddExtraModal(false)}
-        round={round}
-      />
     </div>
   );
 };
-

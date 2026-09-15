@@ -3,10 +3,18 @@ import { usePortal } from '../../context/PortalContext';
 import { UserCheck, CheckCircle2, RotateCw, Calendar, MapPin, Clock, ArrowLeftRight } from 'lucide-react';
 
 export const SPRPortalView: React.FC = () => {
-  const { dutyAssignments, acceptDuty, markAttendance, rounds } = usePortal();
+  const { dutyAssignments, acceptDuty, markAttendance, rounds, currentUser, sprs, sprCycle } = usePortal();
   const [candidateSapInput, setCandidateSapInput] = useState('');
   const [selectedRoundId, setSelectedRoundId] = useState(rounds[1]?.id || rounds[0]?.id || '');
   const [verifyResult, setVerifyResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const currentSpr = sprs.find(
+    (s) => s.sapId === currentUser?.username || s.name.toLowerCase() === (currentUser?.name || '').toLowerCase()
+  );
+  const myDuties = currentSpr
+    ? dutyAssignments.filter((d) => d.sprId === currentSpr.id || d.sprName.toLowerCase() === currentSpr.name.toLowerCase())
+    : dutyAssignments;
+  const dutiesCount = currentSpr ? currentSpr.totalDuties : myDuties.length;
 
   const handleVerifyCandidate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,7 +31,7 @@ export const SPRPortalView: React.FC = () => {
       <div className="bg-[#0B132B] rounded-3xl p-8 text-white shadow-xl flex flex-col md:flex-row items-center justify-between gap-6 border border-slate-800">
         <div className="space-y-2">
           <div className="text-xs font-bold uppercase tracking-widest text-emerald-400">
-            SPR DESK — Welcome, Tanya Kapoor
+            SPR DESK — Welcome, {currentUser?.name || 'Representative'}
           </div>
           <h2 className="text-3xl font-extrabold tracking-tight">Student Placement Representative</h2>
           <p className="text-sm text-slate-300">
@@ -34,11 +42,11 @@ export const SPRPortalView: React.FC = () => {
         <div className="flex items-center space-x-6 border-t md:border-t-0 md:border-l border-slate-800 pt-4 md:pt-0 md:pl-8 text-center">
           <div>
             <span className="text-[10px] text-slate-400 font-bold uppercase">Total Duties</span>
-            <div className="text-2xl font-extrabold text-white mt-0.5">7</div>
+            <div className="text-2xl font-extrabold text-white mt-0.5">{dutiesCount}</div>
           </div>
           <div>
             <span className="text-[10px] text-slate-400 font-bold uppercase">Current Cycle</span>
-            <div className="text-2xl font-extrabold text-amber-400 mt-0.5">7/60</div>
+            <div className="text-2xl font-extrabold text-amber-400 mt-0.5">{sprCycle.usedSprCount}/{sprCycle.totalSprsInPool}</div>
           </div>
         </div>
       </div>
@@ -47,10 +55,15 @@ export const SPRPortalView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Left: Upcoming Duties */}
         <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4">
-          <h3 className="text-lg font-extrabold text-slate-900">Upcoming Duties</h3>
+          <h3 className="text-lg font-extrabold text-slate-900">Upcoming Duties ({myDuties.length})</h3>
 
           <div className="space-y-4">
-            {dutyAssignments.map((duty) => (
+            {myDuties.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 text-center text-xs font-semibold text-slate-500">
+                No duties currently allotted. You are available in the rotation cycle.
+              </div>
+            ) : (
+              myDuties.map((duty) => (
               <div key={duty.id} className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
                 <div className="flex items-start justify-between">
                   <div>
@@ -94,7 +107,7 @@ export const SPRPortalView: React.FC = () => {
                   </button>
                 </div>
               </div>
-            ))}
+            )))}
           </div>
         </div>
 

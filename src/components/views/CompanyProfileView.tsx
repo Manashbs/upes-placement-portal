@@ -17,10 +17,12 @@ import {
   Edit3,
   Award,
   Users,
+  UserCheck,
 } from 'lucide-react';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
+import { ErrorBoundary } from '../common/ErrorBoundary';
 
 interface CompanyProfileViewProps {
   company: Company;
@@ -28,7 +30,7 @@ interface CompanyProfileViewProps {
 }
 
 export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company, onBack }) => {
-  const { drives, rounds, offers, deleteCompany, createRound, uploadShortlistForRound, finalizeCompletedDrive, sprs, students } = usePortal();
+  const { drives, rounds, offers, deleteCompany, deleteRound, createRound, uploadShortlistForRound, finalizeCompletedDrive, sprs, students, setActiveTab } = usePortal();
 
   // Modals State
   const [showAddRoundModal, setShowAddRoundModal] = useState(false);
@@ -38,17 +40,21 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
   const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
+  const [createRoundId, setCreateRoundId] = useState<string>(() => `rnd-${Date.now()}`);
+  const [createRoundSessionId, setCreateRoundSessionId] = useState<string>(
+    () => `ses-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
+  );
 
   // Completion Form Inputs
-  const [completionSatCount, setCompletionSatCount] = useState<number>(company.totalStudentsSat || 120);
-  const [completionOffersCount, setCompletionOffersCount] = useState<number>(company.offersGivenCount || 10);
+  const [completionSatCount, setCompletionSatCount] = useState<number>(Number(company.totalStudentsSat) || 120);
+  const [completionOffersCount, setCompletionOffersCount] = useState<number>(Number(company.offersGivenCount) || 10);
   const [completionFeedback, setCompletionFeedback] = useState<string>(company.recruiterFeedback || '');
 
   // Round Form State matching Screenshot 1 (RoundsView modal)
   const [roundName, setRoundName] = useState('');
   const [roundType, setRoundType] = useState<RoundType>('TECHNICAL_INTERVIEW');
   const [roundMode, setRoundMode] = useState<RoundMode>('ON_CAMPUS');
-  const [date, setDate] = useState('2026-09-12');
+  const [date, setDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Total Venues and Venues List
   const [totalVenues, setTotalVenues] = useState<number>(1);
@@ -59,11 +65,14 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [shortlistedStudentsTemp, setShortlistedStudentsTemp] = useState<any[]>([]);
 
   // Find drives & rounds for this company
-  const companyDrives = drives.filter((d) => d.companyId === company.id || d.companyName === company.name);
-  const companyRounds = rounds.filter((r) => r.companyId === company.id || r.companyName === company.name);
-  const companyOffers = offers.filter((o) => o.companyId === company.id || o.companyName === company.name);
+  const companyDrives = (drives || []).filter((d) => d && (d.companyId === company.id || d.companyName === company.name));
+  const companyRounds = (rounds || []).filter((r) => r && (r.companyId === company.id || r.companyName === company.name));
+  const companyOffers = (offers || []).filter((o) => o && (o.companyId === company.id || o.companyName === company.name));
 
   const isCompleted = company.status === 'COMPLETED';
+  const ctcNumeric = typeof company.ctcTotal === 'number' ? company.ctcTotal : parseFloat(String(company.ctcTotal || 12)) || 12;
+  const compInitials = (company.name || 'CO').substring(0, 2).toUpperCase();
+
 
   const handleTotalVenuesChange = (count: number) => {
     const validCount = Math.max(1, Math.min(10, count));
@@ -120,6 +129,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
 
     createRound(
       {
+        id: createRoundId,
         companyId: company.id,
         companyName: company.name,
         driveId,
@@ -135,7 +145,8 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         status: 'SCHEDULED',
         sprsNeeded,
       },
-      shortlistedStudentsTemp
+      shortlistedStudentsTemp,
+      createRoundSessionId
     );
 
     setShowAddRoundModal(false);
@@ -143,8 +154,23 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
     setShortlistedStudentsTemp([]);
   };
 
+  if (!company) {
+    return (
+      <div className="p-8 text-center bg-white rounded-3xl border border-slate-200 shadow-sm space-y-4">
+        <p className="text-slate-600 font-bold">No company details available.</p>
+        <button
+          onClick={onBack}
+          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-5 py-2.5 rounded-xl cursor-pointer"
+        >
+          Return to Companies
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-6 select-none pb-12">
+    <ErrorBoundary fallbackTitle={`Unable to display ${company?.name || 'Company'} profile`} onReset={onBack}>
+      <div className="space-y-6 select-none pb-12">
       {/* Back Button */}
       <div className="flex items-center justify-between">
         <button
@@ -168,8 +194,8 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
       {/* Main Header Card */}
       <div className="bg-white rounded-3xl p-8 border border-slate-100 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="flex items-center space-x-5">
-          <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-700 font-black text-2xl flex items-center justify-center shadow-xs">
-            {company.logo}
+          <div className="w-16 h-16 rounded-2xl bg-amber-500 text-slate-950 font-black text-2xl flex items-center justify-center shadow-xs">
+            {company.logo || compInitials}
           </div>
 
           <div className="space-y-1">
@@ -181,9 +207,9 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                     : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 }`}
               >
-                • {company.status.charAt(0) + company.status.slice(1).toLowerCase()}
+                • {(company.status || 'ACTIVE').toLowerCase()}
               </span>
-              <span className="text-xs font-semibold text-slate-400">{company.industry}</span>
+              <span className="text-xs font-semibold text-slate-400">{company.industry || 'Placement Process'}</span>
             </div>
 
             <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">
@@ -212,7 +238,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           </button>
 
           <button
-            onClick={() => alert(`Company Brief: ${company.description}\nHR Contact: ${company.hrContact.name} (${company.hrContact.email})`)}
+            onClick={() => alert(`Company: ${company.name}\nProcess: ${company.description || 'Active Placement Drive'}\nHR Contact: ${company.hrContact?.name || 'Career Services Desk'} (${company.hrContact?.email || 'cso@upes.ac.in'})`)}
             className="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold px-5 py-3 rounded-2xl shadow-xs transition-all cursor-pointer"
           >
             <FileText className="w-4 h-4 text-slate-600" />
@@ -228,21 +254,21 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
 
         <p className="text-sm font-medium text-slate-600 max-w-4xl leading-relaxed">
-          {company.description}
+          {company.description || 'Official recruitment and selection drive with automated fair SPR rotation and real-time attendance verification.'}
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-100 space-y-1">
-            <span className="text-xs font-semibold text-slate-400">Roles</span>
+            <span className="text-xs font-semibold text-slate-400">Total Selection Rounds</span>
             <div className="text-2xl font-extrabold text-slate-900">
-              {companyDrives.length || 2}
+              {companyRounds.length}
             </div>
           </div>
 
           <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-100 space-y-1">
-            <span className="text-xs font-semibold text-slate-400">CTC range</span>
+            <span className="text-xs font-semibold text-slate-400">CTC Package</span>
             <div className="text-2xl font-extrabold text-slate-900">
-              ₹{company.ctcTotal.toFixed(1)} LPA
+              ₹{ctcNumeric.toFixed(1)} LPA
             </div>
           </div>
         </div>
@@ -324,17 +350,32 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                       </h4>
                     </div>
 
-                    <span
-                      className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
-                        rnd.status === 'IN_PROGRESS'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : rnd.status === 'COMPLETED'
-                          ? 'bg-slate-100 text-slate-600 border-slate-200'
-                          : 'bg-amber-50 text-amber-800 border-amber-200/80'
-                      }`}
-                    >
-                      • {rnd.status}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span
+                        className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
+                          rnd.status === 'IN_PROGRESS'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : rnd.status === 'COMPLETED'
+                            ? 'bg-slate-100 text-slate-600 border-slate-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200/80'
+                        }`}
+                      >
+                        • {rnd.status}
+                      </span>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Are you sure you want to delete round "${rnd.name}" for ${company.name}?`)) {
+                            deleteRound(rnd.id);
+                          }
+                        }}
+                        title="Delete Round"
+                        className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-1.5 text-xs text-slate-600 font-medium">
@@ -367,12 +408,28 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                     </div>
                   </div>
 
-                  {/* SPR Duty Section */}
-                  <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-                    <span className="font-semibold text-slate-600">Assigned SPRs:</span>
-                    <span className="font-extrabold text-slate-800">
-                      {assignedSprNames.length > 0 ? assignedSprNames.join(', ') : 'None assigned yet'}
-                    </span>
+                  {/* Action & SPR Duty Section */}
+                  <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2">
+                    <div className="text-xs text-slate-500 overflow-hidden">
+                      <span className="font-semibold text-slate-600">SPRs: </span>
+                      <span className="font-extrabold text-slate-800">
+                        {assignedSprNames.length > 0 ? assignedSprNames.join(', ') : 'None assigned yet'}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        try {
+                          sessionStorage.setItem('upes_active_round_id', rnd.id);
+                        } catch {}
+                        setActiveTab('attendance');
+                      }}
+                      className="inline-flex items-center space-x-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Mark Attendance</span>
+                    </button>
                   </div>
                 </div>
               );
@@ -835,15 +892,16 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           setShowExcelUpload(false);
           setSelectedRoundForUpload(null);
         }}
-        targetRoundId={selectedRoundForUpload?.id}
+        targetRoundId={selectedRoundForUpload?.id || createRoundId}
         companyName={selectedRoundForUpload?.companyName || company.name}
-        roundName={selectedRoundForUpload?.name || roundName}
-        onShortlistValidated={(validStudents) => {
+        roundName={selectedRoundForUpload?.name || roundName || 'Shortlist'}
+        onShortlistValidated={(validStudents, sessionId) => {
           if (selectedRoundForUpload) {
-            uploadShortlistForRound(selectedRoundForUpload.id, validStudents);
+            uploadShortlistForRound(selectedRoundForUpload.id, validStudents, sessionId);
             setSelectedRoundForUpload(null);
           } else {
             setShortlistedStudentsTemp(validStudents);
+            if (sessionId) setCreateRoundSessionId(sessionId);
           }
           setShowExcelUpload(false);
         }}
@@ -860,5 +918,7 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         }}
       />
     </div>
+    </ErrorBoundary>
   );
 };
+

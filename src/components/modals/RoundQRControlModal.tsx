@@ -3,7 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { usePortal } from '../../context/PortalContext';
 import { Round } from '../../types';
 import { Download, RefreshCw, ShieldCheck, MapPin, FileSpreadsheet } from 'lucide-react';
-import { exportRosterExcel } from '../../utils/excelUtils';
+import { exportRosterExcel, exportExactSheetWithAttendance } from '../../utils/excelUtils';
 
 interface RoundQRControlModalProps {
   round: Round | null;
@@ -116,7 +116,7 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
           </div>
 
           <button
-            onClick={() => exportRosterExcel(round.companyName, round.name, currentRoundStudents, 'STANDARD')}
+            onClick={() => exportExactSheetWithAttendance(round.id, round.companyName, round.name, currentRoundStudents, [], 'xlsx')}
             className="w-full inline-flex items-center justify-center space-x-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold py-2.5 rounded-xl transition-colors"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />

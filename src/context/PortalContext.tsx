@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   UserRole,
   Student,
@@ -11,6 +11,7 @@ import {
   SPRDutyAssignment,
   Offer,
   AuditLog,
+  PortalUser,
 } from '../types';
 import {
   initialStudents,
@@ -23,29 +24,61 @@ import {
   initialDutyAssignments,
   initialOffers,
   initialAuditLogs,
+  initialUsers,
 } from '../mock/mockData';
-import { allocateSPRsForRound, allocateSPRsVenueWise } from '../utils/sprAllocationEngine';
+import { allocateSPRsForRound } from '../utils/sprAllocationEngine';
 import { generateRoundQRToken } from '../utils/qrUtils';
-import { exportSPRDutiesExcel } from '../utils/excelUtils';
+import { fetchCloudAttendanceEvents, recordAttendanceToCloud, subscribeToLiveCloudScans, CloudAttendanceEvent } from '../utils/cloudSync';
+import { saveSheetToStorage, getSheetBufferSync, getSheetMetaSync, hasSheetForRound } from '../utils/sheetStorage';
+import { fetchCloudUsers, publishUsersToCloud } from '../utils/userSync';
+import {
+  saveToIDB,
+  getFromIDB,
+  fetchRemoteDatabase,
+  persistToRemoteDatabase,
+  sanitizeUsers,
+  sanitizeSPRs,
+} from '../utils/portalDb';
 
+export interface RoundConfigInput {
+  name: string;
+  type?: Round['type'];
+  venue?: string;
+  venues?: string[];
+  date?: string;
+  startTime?: string;
+  endTime?: string;
+  sprsNeeded: number;
+}
 
 export interface ComprehensiveCompanyPayload {
   name: string;
-  industry: string;
-  category: Company['category'];
-  ctcTotal: number;
-  description: string;
-  rolesOffered: string[];
+  driveDate?: string;
+  venues?: string[];
+  roundsConfig?: RoundConfigInput[];
+  industry?: string;
+  category?: Company['category'];
+  ctcTotal?: number;
+  description?: string;
+  rolesOffered?: string[];
   roundsCount?: number;
-  roundTypes?: { name: string; type: Round['type']; venue: string }[];
-  minCgpa: number;
-  maxBacklogs: number;
+  minCgpa?: number;
+  maxBacklogs?: number;
   hrName?: string;
   hrEmail?: string;
   hrPhone?: string;
 }
 
 interface PortalContextType {
+  currentUser: PortalUser | null;
+  users: PortalUser[];
+  login: (username: string, password: string, rememberMe?: boolean) => boolean;
+  logout: () => void;
+  createUser: (userData: Omit<PortalUser, 'id' | 'createdAt'>) => { success: boolean; message: string };
+  updateUser: (userId: string, data: Partial<PortalUser>) => { success: boolean; message: string };
+  deleteUser: (userId: string) => { success: boolean; message: string };
+  resetPortalData: () => void;
+
   currentRole: UserRole;
   setCurrentRole: (role: UserRole) => void;
   activeTab: string;
@@ -69,12 +102,14 @@ interface PortalContextType {
   toggleCompanyStatus: (id: string, status: Company['status']) => void;
   updateCompanyFeedback: (companyId: string, feedback: string) => void;
   finalizeCompletedDrive: (companyId: string, data: { totalStudentsSat: number; offersGivenCount: number; recruiterFeedback: string }) => void;
-  createRound: (roundData: Partial<Round>, shortlistedStudents: Student[]) => void;
-  uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[]) => void;
+  createRound: (roundData: Partial<Round> & { sprsNeeded?: number }, shortlistedStudents: Student[], customSessionId?: string) => void;
+  uploadShortlistForRound: (roundId: string, shortlistedStudents: Student[], customSessionId?: string) => void;
+  deleteRound: (roundId: string) => void;
   markAttendance: (roundId: string, sapId: string, method?: string, candidateName?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
   triggerSprAllocation: (roundId: string, countNeeded: number) => { success: boolean; count: number };
   addSpr: (sprData: { name: string; sapId: string; branch: string; email?: string; phone?: string }) => void;
+  updateSpr: (id: string, data: Partial<SPR>) => void;
   deleteSpr: (id: string) => void;
   acceptDuty: (dutyId: string) => void;
   debarStudent: (studentId: string, reason: string) => void;
@@ -82,108 +117,683 @@ interface PortalContextType {
   acceptOffer: (offerId: string) => void;
   regenerateQR: (roundId: string) => void;
   toggleGeoFence: (roundId: string) => void;
-  allotExtraSPRs: (
-    roundId: string,
-    mode: 'MANUAL' | 'RANDOM',
-    countNeeded?: number,
-    manualSelection?: { sprId: string; venue: string }[]
-  ) => { success: boolean; message: string; count: number };
-  exportSPRDutiesReport: (roundId?: string) => void;
-}
+  resetAllDutiesToZero: () => void;
 
+  // Original Excel buffer storage (per round) for preserving company sheet format
+  storeOriginalExcel: (roundId: string, buffer: ArrayBuffer, rawMeta?: { headers: string[]; rows: any[][] }) => void;
+  getOriginalExcel: (roundId: string) => ArrayBuffer | undefined;
+  getOriginalExcelRaw: (roundId: string) => { headers: string[]; rows: any[][] } | undefined;
+  syncFromCloud: () => Promise<void>;
+}
 
 const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
-export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentRole, setCurrentRole] = useState<UserRole>('PLACEMENT_OFFICER');
-  const [activeTab, setActiveTab] = useState<string>('rounds');
+const DUMMY_SPR_NAMES = ['tanya kapoor', 'rohan mehra', 'divya nair', 'karthik raja', 'ananya roy', 'siddharth sen'];
+function isDummySprList(list: SPR[]): boolean {
+  if (!Array.isArray(list) || list.length < 50) return true;
+  return list.some((s) => DUMMY_SPR_NAMES.includes((s.name || '').toLowerCase().trim()));
+}
 
+export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [users, setUsers] = useState<PortalUser[]>(() => {
+    try {
+      const saved = localStorage.getItem('upes_portal_users');
+      if (saved) {
+        const parsed: PortalUser[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return sanitizeUsers(parsed);
+        }
+      }
+    } catch {}
+    return initialUsers;
+  });
+
+  const [currentUser, setCurrentUser] = useState<PortalUser | null>(() => {
+    try {
+      const saved = localStorage.getItem('upes_current_user');
+      if (saved) {
+        const parsed: PortalUser = JSON.parse(saved);
+        const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
+        if (
+          parsed.id === 'usr-director-manash' ||
+          (parsed.username && parsed.username.toLowerCase().includes('manash')) ||
+          (parsed.name && parsed.name.toLowerCase().includes('manash'))
+        ) {
+          const migrated: PortalUser = {
+            ...parsed,
+            id: 'usr-cso',
+            username: 'CSO@Upes.ac.in',
+            name: 'CSO',
+            email: 'CSO@Upes.ac.in',
+            password: 'Pass@123',
+          };
+          localStorage.setItem('upes_current_user', JSON.stringify(migrated));
+          return migrated;
+        }
+        if (!blacklist.includes((parsed.username || '').toLowerCase())) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return null;
+  });
+
+  const [currentRole, setCurrentRole] = useState<UserRole>(() => {
+    try {
+      const saved = localStorage.getItem('upes_current_user');
+      if (saved) {
+        const u: PortalUser = JSON.parse(saved);
+        return u.role;
+      }
+    } catch {}
+    return 'DIRECTOR';
+  });
+
+  const [activeTab, setActiveTab] = useState<string>('companies');
+
+  // Permanent Database Sync on Mount: IndexedDB + Cloud Database (/api/db)
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadPermanentDatabase = async () => {
+      try {
+        // 1. Load from browser permanent IndexedDB
+        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs] = await Promise.all([
+          getFromIDB<PortalUser[]>('users'),
+          getFromIDB<Company[]>('companies'),
+          getFromIDB<Drive[]>('drives'),
+          getFromIDB<Round[]>('rounds'),
+          getFromIDB<RoundStudent[]>('roundStudents'),
+          getFromIDB<Student[]>('students'),
+          getFromIDB<SPR[]>('sprs'),
+        ]);
+
+        if (!isMounted) return;
+
+        if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies);
+        if (idbDrives && idbDrives.length > 0) setDrives(idbDrives);
+        if (idbRounds && idbRounds.length > 0) {
+          const valid = idbRounds
+            .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+            .map((r) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r));
+          setRounds(valid);
+        }
+        if (idbRoundStudents && idbRoundStudents.length > 0) {
+          // Strictly isolate candidates: only retain records for rounds with uploaded sheets
+          setRoundStudents(idbRoundStudents.filter((rs) => hasSheetForRound(rs.roundId)));
+        }
+        if (idbStudents && idbStudents.length > 0) setStudents(idbStudents);
+        if (idbUsers && idbUsers.length > 0) setUsers(sanitizeUsers(idbUsers));
+        
+        // SPR Duty reset: Guarantee all SPR duties are 0 across system
+        if (idbSprs && idbSprs.length > 0) {
+          setSprs(sanitizeSPRs(idbSprs));
+        } else {
+          setSprs(initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false })));
+        }
+        setDutyAssignments([]);
+        setSprCycle({
+          id: 1,
+          startedAt: new Date().toISOString().split('T')[0],
+          status: 'OPEN',
+          totalSprsInPool: 50,
+          usedSprCount: 0,
+        });
+
+        // 2. Fetch and merge latest from Cloud Database (/api/db)
+        const remoteData = await fetchRemoteDatabase();
+        if (!isMounted || !remoteData) return;
+
+        if (Array.isArray(remoteData.companies) && remoteData.companies.length > 0) {
+          setCompanies((prev) => {
+            const existingIds = new Set(prev.map((c) => c.id));
+            const merged = [...prev];
+            remoteData.companies!.forEach((rc) => {
+              if (!existingIds.has(rc.id)) merged.push(rc);
+            });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.rounds) && remoteData.rounds.length > 0) {
+          setRounds((prev) => {
+            const existingIds = new Set(prev.map((r) => r.id));
+            const merged = [...prev];
+            remoteData.rounds!
+              .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+              .map((r) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r))
+              .forEach((rr) => {
+                if (!existingIds.has(rr.id)) merged.push(rr);
+              });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.drives) && remoteData.drives.length > 0) {
+          setDrives((prev) => {
+            const existingIds = new Set(prev.map((d) => d.id));
+            const merged = [...prev];
+            remoteData.drives!.forEach((rd) => {
+              if (!existingIds.has(rd.id)) merged.push(rd);
+            });
+            return merged;
+          });
+        }
+
+        if (Array.isArray(remoteData.users) && remoteData.users.length > 0) {
+          setUsers((prev) => sanitizeUsers([...prev, ...remoteData.users!]));
+        }
+
+        if (Array.isArray(remoteData.roundStudents) && remoteData.roundStudents.length > 0) {
+          setRoundStudents((prev) => {
+            const key = (rs: RoundStudent) => `${rs.roundId}_${rs.sapId}`;
+            const map = new Map<string, RoundStudent>();
+            prev.filter((p) => hasSheetForRound(p.roundId)).forEach((p) => map.set(key(p), p));
+            remoteData.roundStudents!
+              .filter((rs) => hasSheetForRound(rs.roundId))
+              .forEach((rs) => {
+                const existing = map.get(key(rs));
+                if (!existing || (existing.attendanceStatus === 'PENDING' && rs.attendanceStatus !== 'PENDING')) {
+                  map.set(key(rs), rs);
+                }
+              });
+            return Array.from(map.values());
+          });
+        }
+
+        if (Array.isArray(remoteData.sprs) && remoteData.sprs.length > 0) {
+          setSprs((prev) => sanitizeSPRs(prev.length >= 50 ? prev : remoteData.sprs!));
+        }
+      } catch (err) {
+        console.warn('[PortalDB] Init error:', err);
+      }
+    };
+
+    loadPermanentDatabase();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const [students, setStudents] = useState<Student[]>(() => {
     const saved = localStorage.getItem('upes_students');
     return saved ? JSON.parse(saved) : initialStudents;
   });
-
   const [companies, setCompanies] = useState<Company[]>(() => {
-    const saved = localStorage.getItem('upes_companies');
-    return saved ? JSON.parse(saved) : initialCompanies;
+    try {
+      const saved = localStorage.getItem('upes_companies');
+      if (saved) {
+        const parsed: Company[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.filter((c) => c.name !== 'Company' && c.id !== 'comp-1');
+        }
+      }
+    } catch {}
+    return initialCompanies;
   });
-
-  const [drives, setDrives] = useState<Drive[]>(initialDrives);
+  const [drives, setDrives] = useState<Drive[]>(() => {
+    try {
+      const saved = localStorage.getItem('upes_drives');
+      if (saved) {
+        const parsed: Drive[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.filter((d) => d.companyName !== 'Company' && d.companyId !== 'comp-1');
+        }
+      }
+    } catch {}
+    return initialDrives;
+  });
   const [rounds, setRounds] = useState<Round[]>(() => {
-    const saved = localStorage.getItem('upes_rounds');
-    return saved ? JSON.parse(saved) : initialRounds;
+    try {
+      const saved = localStorage.getItem('upes_rounds');
+      if (saved) {
+        const parsed: Round[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter(
+              (r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId && r.companyName
+            )
+            .map((r) => {
+              // If no Excel sheet was uploaded for this round, totalShortlisted must be 0
+              if (!hasSheetForRound(r.id)) {
+                return { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 };
+              }
+              return r;
+            });
+        }
+      }
+    } catch {}
+    return initialRounds;
   });
   const [roundStudents, setRoundStudents] = useState<RoundStudent[]>(() => {
-    const saved = localStorage.getItem('upes_round_students');
-    return saved ? JSON.parse(saved) : initialRoundStudents;
+    try {
+      const saved = localStorage.getItem('upes_round_students');
+      if (saved) {
+        const parsed: RoundStudent[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Strictly keep candidates only for rounds that have an uploaded Excel sheet
+          return parsed.filter((rs) => hasSheetForRound(rs.roundId));
+        }
+      }
+    } catch {}
+    return initialRoundStudents;
   });
   const [sprs, setSprs] = useState<SPR[]>(() => {
-    const saved = localStorage.getItem('upes_sprs');
-    return saved ? JSON.parse(saved) : initialSPRs;
+    try {
+      const saved = localStorage.getItem('upes_sprs');
+      if (saved) {
+        const parsed: SPR[] = JSON.parse(saved);
+        if (!isDummySprList(parsed)) {
+          // Force every SPR duty to 0 and unused in cycle as requested
+          return parsed.map((s) => ({
+            ...s,
+            totalDuties: 0,
+            usedInCurrentCycle: false,
+          }));
+        }
+      }
+    } catch {}
+    try {
+      localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }))));
+    } catch {}
+    return initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }));
   });
-  const [sprCycle, setSprCycle] = useState<SPRCycle>(initialSPRCycle);
-  const [dutyAssignments, setDutyAssignments] = useState<SPRDutyAssignment[]>(initialDutyAssignments);
+  const [sprCycle, setSprCycle] = useState<SPRCycle>(() => ({
+    id: 1,
+    startedAt: new Date().toISOString().split('T')[0],
+    status: 'OPEN',
+    totalSprsInPool: 50,
+    usedSprCount: 0,
+  }));
+  const [dutyAssignments, setDutyAssignments] = useState<SPRDutyAssignment[]>(() => {
+    try {
+      const saved = localStorage.getItem('upes_duty_assignments');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [];
+  });
   const [offers, setOffers] = useState<Offer[]>(initialOffers);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [notifications, setNotifications] = useState<string[]>([
-    'Season 2025-2026 is LIVE. 12 active drives running.',
-    'Microsoft Round 2 Technical Interview is IN PROGRESS at Block B.',
-    '4 rounds currently need SPR duty allocation.',
+    'UPES Placement Portal is LIVE for Placement Operations.',
   ]);
 
-  // Sync to local storage for persistence & live sync across browser tabs
+  // Store original Excel file buffers per round (roundId -> ArrayBuffer)
+  // Uses multi-layer storage (IndexedDB + memory + localStorage) so it survives page reloads and refreshes
+  const [originalExcelBuffers, setOriginalExcelBuffers] = useState<Map<string, ArrayBuffer>>(new Map());
+
+  const storeOriginalExcel = (roundId: string, buffer: ArrayBuffer, rawMeta?: { headers: string[]; rows: any[][] }) => {
+    setOriginalExcelBuffers((prev) => {
+      const next = new Map(prev);
+      next.set(roundId, buffer);
+      return next;
+    });
+
+    // Save strictly to multi-layer persistent sheet storage for this roundId
+    saveSheetToStorage(roundId, buffer, rawMeta);
+  };
+
+  const getOriginalExcel = (roundId: string): ArrayBuffer | undefined => {
+    // 1. Check in-memory state map strictly for roundId
+    if (originalExcelBuffers.has(roundId)) {
+      return originalExcelBuffers.get(roundId);
+    }
+
+    // 2. Check multi-layer sheetStorage strictly for roundId
+    const fromStorage = getSheetBufferSync(roundId);
+    if (fromStorage) {
+      setOriginalExcelBuffers((prev) => {
+        const next = new Map(prev);
+        next.set(roundId, fromStorage);
+        return next;
+      });
+      return fromStorage;
+    }
+
+    return undefined;
+  };
+
+  const getOriginalExcelRaw = (roundId: string): { headers: string[]; rows: any[][] } | undefined => {
+    return getSheetMetaSync(roundId);
+  };
+
+  // Multi-tier Database Persistence: localStorage + IndexedDB + Cloud Database
   useEffect(() => {
-    localStorage.setItem('upes_students', JSON.stringify(students));
+    try {
+      localStorage.setItem('upes_students', JSON.stringify(students));
+      saveToIDB('students', students);
+    } catch {}
   }, [students]);
 
   useEffect(() => {
-    localStorage.setItem('upes_companies', JSON.stringify(companies));
+    try {
+      localStorage.setItem('upes_companies', JSON.stringify(companies));
+      saveToIDB('companies', companies);
+      persistToRemoteDatabase({ companies });
+    } catch {}
   }, [companies]);
 
   useEffect(() => {
-    localStorage.setItem('upes_sprs', JSON.stringify(sprs));
+    try {
+      localStorage.setItem('upes_drives', JSON.stringify(drives));
+      saveToIDB('drives', drives);
+      persistToRemoteDatabase({ drives });
+    } catch {}
+  }, [drives]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_sprs', JSON.stringify(sprs));
+      saveToIDB('sprs', sprs);
+      persistToRemoteDatabase({ sprs });
+    } catch {}
   }, [sprs]);
 
   useEffect(() => {
-    localStorage.setItem('upes_rounds', JSON.stringify(rounds));
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(rounds));
+      saveToIDB('rounds', rounds);
+      persistToRemoteDatabase({ rounds });
+    } catch {}
   }, [rounds]);
 
   useEffect(() => {
-    localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
+    try {
+      localStorage.setItem('upes_round_students', JSON.stringify(roundStudents));
+      saveToIDB('roundStudents', roundStudents);
+      persistToRemoteDatabase({ roundStudents });
+    } catch {}
   }, [roundStudents]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_portal_users', JSON.stringify(users));
+      saveToIDB('users', users);
+      persistToRemoteDatabase({ users });
+    } catch {}
+  }, [users]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(dutyAssignments));
+      saveToIDB('dutyAssignments', dutyAssignments);
+      persistToRemoteDatabase({ dutyAssignments });
+    } catch {}
+  }, [dutyAssignments]);
+
+  // Automatically reconcile duty assignments and SPR duties whenever rounds change
+  // Ensures that when any process or round is deleted, orphaned duties are pruned and SPR duty counts are reduced
+  useEffect(() => {
+    const activeRoundIds = new Set(rounds.map((r) => r.id));
+    setDutyAssignments((prev) => {
+      const activeDuties = prev.filter((d) => activeRoundIds.has(d.roundId));
+      if (activeDuties.length !== prev.length) {
+        setSprs((sprList) =>
+          sprList.map((s) => {
+            const activeCount = activeDuties.filter((d) => d.sprId === s.id).length;
+            return {
+              ...s,
+              totalDuties: activeCount,
+              usedInCurrentCycle: activeCount > 0,
+            };
+          })
+        );
+        return activeDuties;
+      }
+      return prev;
+    });
+  }, [rounds]);
+
+  // Helper to trigger real-time live sync across state, localStorage, same-window events & BroadcastChannel
+  const syncLiveAttendance = (newRoundStudents: RoundStudent[], newRounds: Round[]) => {
+    setRoundStudents(newRoundStudents);
+    setRounds(newRounds);
+    try {
+      localStorage.setItem('upes_round_students', JSON.stringify(newRoundStudents));
+      localStorage.setItem('upes_rounds', JSON.stringify(newRounds));
+    } catch {}
+
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        const bc = new BroadcastChannel('upes_attendance_live_sync');
+        bc.postMessage({ type: 'ATTENDANCE_LIVE_UPDATE' });
+        bc.close();
+      } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('upes_attendance_updated'));
+    }
+  };
+
+  // Helper to apply incoming cloud/SSE attendance events to state & localStorage
+  const applyAttendanceEvents = (events: CloudAttendanceEvent[]) => {
+    if (!events || events.length === 0) return;
+
+    setRoundStudents((prevRs) => {
+      let changed = false;
+
+      // 1. Update existing records in roster
+      const updatedRs = prevRs.map((rs) => {
+        const rsSap = String(rs.sapId || '').trim();
+        const rsName = String(rs.studentName || '').toLowerCase().trim();
+
+        const matchingCloudEvent = events.find((ev) => {
+          if (ev.roundId !== rs.roundId) return false;
+          const evSap = String(ev.sapId || '').trim();
+          const evName = String(ev.studentName || '').toLowerCase().trim();
+
+          // 1. Exact SAP ID match
+          if (evSap && rsSap && evSap === rsSap) return true;
+          // 2. Exact student name match
+          if (evName && rsName && evName === rsName) return true;
+          // 3. Name contains
+          if (evName && rsName && (evName.includes(rsName) || rsName.includes(evName)) && rsName.length > 3) return true;
+          // 4. Candidate (SAP) match
+          if (evName.includes(`(${rsSap})`) || rsName.includes(`(${evSap})`)) return true;
+          // 5. Student ID match
+          if (rs.studentId && evSap && rs.studentId.trim() === evSap) return true;
+
+          return false;
+        });
+
+        if (matchingCloudEvent && rs.attendanceStatus !== 'PRESENT' && rs.attendanceStatus !== 'MANUALLY_MARKED') {
+          changed = true;
+          return {
+            ...rs,
+            attendanceStatus: 'PRESENT' as const,
+            attendanceTime: matchingCloudEvent.time || rs.attendanceTime || 'Just now',
+            markedBy: matchingCloudEvent.method || 'REAL_CAMERA_QR_SCAN',
+            studentName: rs.studentName || matchingCloudEvent.studentName,
+          };
+        }
+        return rs;
+      });
+
+      // 2. Auto-insert dynamically scanned candidates if not already in roster
+      events.forEach((ev) => {
+        if (!ev.roundId || !ev.sapId) return;
+        const evSap = String(ev.sapId).trim();
+        const exists = updatedRs.some(
+          (rs) => rs.roundId === ev.roundId && String(rs.sapId).trim() === evSap
+        );
+        if (!exists) {
+          changed = true;
+          const matchedStudent = students.find((s) => String(s.sapId).trim() === evSap);
+          updatedRs.unshift({
+            roundId: ev.roundId,
+            studentId: matchedStudent?.id || `st-${evSap}`,
+            sapId: evSap,
+            studentName: ev.studentName || matchedStudent?.name || `Candidate (${evSap})`,
+            email: matchedStudent?.email || `${evSap}@stu.upes.ac.in`,
+            phone: matchedStudent?.phone || 'N/A',
+            branch: matchedStudent?.branch || 'B.Tech CSE',
+            shortlistStatus: 'SHORTLISTED',
+            attendanceStatus: 'PRESENT',
+            attendanceTime: ev.time || 'Just now',
+            markedBy: ev.method || 'REAL_CAMERA_QR_SCAN',
+            panelNumber: 'Panel 1',
+          });
+        }
+      });
+
+      if (changed) {
+        try {
+          localStorage.setItem('upes_round_students', JSON.stringify(updatedRs));
+        } catch {}
+        setRounds((prevRounds) => {
+          const nextRounds = prevRounds.map((r) => {
+            const count = updatedRs.filter(
+              (item) => item.roundId === r.id && (item.attendanceStatus === 'PRESENT' || item.attendanceStatus === 'MANUALLY_MARKED')
+            ).length;
+            return { ...r, attendedCount: count };
+          });
+          try {
+            localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+          } catch {}
+          return nextRounds;
+        });
+        return updatedRs;
+      }
+      return prevRs;
+    });
+  };
+
+  const isSyncingRef = useRef(false);
+  const syncFromCloud = async () => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    try {
+      const events = await fetchCloudAttendanceEvents();
+      if (events && events.length > 0) {
+        applyAttendanceEvents(events);
+      }
+    } catch (err) {
+      console.warn('[CloudSync] Polling error:', err);
+    } finally {
+      isSyncingRef.current = false;
+    }
+  };
 
   // Live real-time cross-tab and cross-window sync
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'upes_round_students' && e.newValue) {
+    const reloadFromStorage = () => {
+      const savedRs = localStorage.getItem('upes_round_students');
+      if (savedRs) {
         try {
-          setRoundStudents(JSON.parse(e.newValue));
+          setRoundStudents(JSON.parse(savedRs));
         } catch {}
       }
-      if (e.key === 'upes_rounds' && e.newValue) {
+
+      const savedR = localStorage.getItem('upes_rounds');
+      if (savedR) {
         try {
-          setRounds(JSON.parse(e.newValue));
+          setRounds(JSON.parse(savedR));
         } catch {}
       }
     };
 
-    window.addEventListener('storage', handleStorage);
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'upes_round_students' || e.key === 'upes_rounds') {
+        reloadFromStorage();
+      }
+    };
 
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('upes_attendance_updated', reloadFromStorage);
+
+    // BroadcastChannel sync
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
       bc = new BroadcastChannel('upes_attendance_live_sync');
       bc.onmessage = (evt) => {
         if (evt.data?.type === 'ATTENDANCE_LIVE_UPDATE') {
-          if (evt.data.roundStudents) setRoundStudents(evt.data.roundStudents);
-          if (evt.data.rounds) setRounds(evt.data.rounds);
+          reloadFromStorage();
+          if (evt.data?.event) {
+            applyAttendanceEvents([evt.data.event]);
+          }
         }
       };
     }
 
+    // Zero-latency instant SSE stream from candidate mobile devices
+    const unsubscribeSSE = subscribeToLiveCloudScans((ev) => {
+      applyAttendanceEvents([ev]);
+    });
+
+    // Custom window event listener
+    const handleLiveRecorded = (e: any) => {
+      if (e.detail) {
+        applyAttendanceEvents([e.detail]);
+      }
+    };
+    window.addEventListener('upes_live_scan_recorded', handleLiveRecorded);
+
+    // Cloud sync for registered users
+    const syncUsersFromCloud = async () => {
+      try {
+        const cloudUsers = await fetchCloudUsers();
+        if (cloudUsers && Array.isArray(cloudUsers) && cloudUsers.length > 0) {
+          const blacklist = ['admin', 'officer', 'spr', 'recruiter', 'rohit.kumar@upes.ac.in', 'aanchal.gupta@upes.ac.in'];
+          const validCloudUsers = cloudUsers.filter((cu) => {
+            const uname = (cu.username || '').toLowerCase();
+            const uemail = (cu.email || '').toLowerCase();
+            return (
+              !blacklist.includes(uname) &&
+              !blacklist.includes(uemail) &&
+              (cu.role === 'DIRECTOR' || cu.role === 'CSO' || cu.role === 'CAREER_SERVICE_OFFICER' || cu.role === 'MASTER_ADMIN')
+            );
+          });
+
+          setUsers((prev) => {
+            const merged = [...prev];
+            validCloudUsers.forEach((cu) => {
+              const idx = merged.findIndex((m) => m.id === cu.id || m.username.toLowerCase() === cu.username.toLowerCase());
+              if (idx >= 0) {
+                merged[idx] = { ...merged[idx], ...cu };
+              } else {
+                merged.push(cu);
+              }
+            });
+            try {
+              localStorage.setItem('upes_portal_users', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      } catch {}
+    };
+
+    let userBc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      userBc = new BroadcastChannel('upes_users_live_sync');
+      userBc.onmessage = (evt) => {
+        if (evt.data?.type === 'USERS_UPDATED' && Array.isArray(evt.data.users)) {
+          setUsers(evt.data.users);
+        }
+      };
+    }
+
+    const pollInterval = setInterval(reloadFromStorage, 1000);
+    const cloudPollInterval = setInterval(syncFromCloud, 2500);
+    const userPollInterval = setInterval(syncUsersFromCloud, 3000);
+    syncFromCloud(); // initial fetch on mount
+    syncUsersFromCloud();
+
     return () => {
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('upes_attendance_updated', reloadFromStorage);
+      window.removeEventListener('upes_live_scan_recorded', handleLiveRecorded);
+      unsubscribeSSE();
+      clearInterval(pollInterval);
+      clearInterval(cloudPollInterval);
+      clearInterval(userPollInterval);
       if (bc) bc.close();
+      if (userBc) userBc.close();
     };
   }, []);
 
@@ -204,25 +814,27 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const driveId = `drv-${Date.now()}`;
 
     // Filter eligible students based on criteria
+    const minCgpa = payload.minCgpa ?? 0;
+    const maxBacklogs = payload.maxBacklogs ?? 100;
     const eligiblePool = students.filter(
-      (s) => s.cgpa >= payload.minCgpa && s.activeBacklogs <= payload.maxBacklogs && s.status !== 'DEBARRED'
+      (s) => s.cgpa >= minCgpa && s.activeBacklogs <= maxBacklogs && s.status !== 'DEBARRED'
     );
 
     const createdComp: Company = {
       id: compId,
       name: payload.name,
       logo: payload.name.substring(0, 3).toUpperCase(),
-      category: payload.category,
-      industry: payload.industry,
-      description: payload.description,
-      ctcTotal: payload.ctcTotal,
-      ctcBreakup: { base: payload.ctcTotal * 0.7, variable: payload.ctcTotal * 0.2, joiningBonus: payload.ctcTotal * 0.1 },
+      category: payload.category || 'CORE',
+      industry: payload.industry || 'Placement Drive',
+      description: payload.description || `Drive for ${payload.name}`,
+      ctcTotal: payload.ctcTotal || 10,
+      ctcBreakup: { base: (payload.ctcTotal || 10) * 0.7, variable: (payload.ctcTotal || 10) * 0.2, joiningBonus: (payload.ctcTotal || 10) * 0.1 },
       status: 'ACTIVE',
       eligibleStudentsCount: eligiblePool.length || 955,
-      activeDrivesCount: payload.rolesOffered.length || 1,
+      activeDrivesCount: (payload.rolesOffered && payload.rolesOffered.length) || 1,
       hrContact: {
-        name: payload.hrName || 'Sarah Jenkins',
-        email: payload.hrEmail || `hr@${payload.name.toLowerCase().replace(/\s+/g, '')}.com`,
+        name: payload.hrName || 'Placement Officer',
+        email: payload.hrEmail || `placement@upes.ac.in`,
         phone: payload.hrPhone || '+91 98765 00000',
       },
     };
@@ -235,36 +847,214 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       companyId: compId,
       companyName: payload.name,
       academicYear: '2026-2027',
-      jobRole: payload.rolesOffered[0] || 'Software Engineer',
-      ctc: payload.ctcTotal,
-      tier: payload.category,
+      jobRole: (payload.rolesOffered && payload.rolesOffered[0]) || 'Recruitment Drive',
+      ctc: payload.ctcTotal || 10,
+      tier: payload.category || 'CORE',
       eligibilityCriteria: {
-        minCgpa: payload.minCgpa,
-        maxActiveBacklogs: payload.maxBacklogs,
+        minCgpa,
+        maxActiveBacklogs: maxBacklogs,
         allowedBranches: ['B.Tech CSE - AI & ML', 'B.Tech CSE - Cyber Security', 'B.Tech CSE - Data Science'],
         allowedBatches: [2026],
-        tierRestrictionPolicy: `${payload.category} tier rules apply.`,
+        tierRestrictionPolicy: `Placement rules apply.`,
       },
       status: 'ONGOING',
     };
 
     setDrives((prev) => [newDrive, ...prev]);
 
-    // Note: Creating a company ONLY creates the company profile & drive eligibility.
-    // Rounds are NOT created automatically and must be added manually from the Rounds section.
-    addAuditLog('CREATE_COMPANY', `Added company profile for ${payload.name}.`);
+    // Check if rounds are configured to auto-create with venue and fair SPR allotment
+    if (payload.roundsConfig && payload.roundsConfig.length > 0) {
+      let currentSprPool = [...sprs];
+      let currentCycleState = { ...sprCycle };
+      let currentRoundsList = [...rounds];
+      const newDuties: SPRDutyAssignment[] = [];
+      const newRoundsCreated: Round[] = [];
+      const newRoundStudentsList: RoundStudent[] = [];
+
+      payload.roundsConfig.forEach((rc, idx) => {
+        const roundNum = idx + 1;
+        const roundId = `rnd-${compId}-${roundNum}`;
+        const rName = rc.name || `Round ${roundNum}`;
+        const rDate = rc.date || payload.driveDate || new Date().toISOString().split('T')[0];
+        const rStartTime = '09:00';
+        const rEndTime = '18:00';
+        const rVenue = (rc.venues && rc.venues.filter(Boolean).join(', ')) || rc.venue || (payload.venues && payload.venues[idx % payload.venues.length]) || 'Campus Venue';
+        const sprsReq = Math.max(1, Number(rc.sprsNeeded) || 2);
+
+        const qrResult = generateRoundQRToken(roundId, driveId, payload.name, rName, 60);
+
+        const mockRoundForAlloc: Round = {
+          id: roundId,
+          driveId,
+          companyId: compId,
+          companyName: payload.name,
+          roundNumber: roundNum,
+          name: rName,
+          type: rc.type || (roundNum === 1 ? 'ONLINE_TEST' : roundNum === 2 ? 'TECHNICAL_INTERVIEW' : 'HR_INTERVIEW'),
+          mode: 'ON_CAMPUS',
+          date: rDate,
+          startTime: rStartTime,
+          endTime: rEndTime,
+          venue: rVenue,
+          capacity: 60,
+          qrToken: qrResult.token,
+          qrExpiresAt: qrResult.expiresAtIso,
+          geoFenceEnabled: false,
+          status: 'SCHEDULED',
+          assignedSprIds: [],
+          totalShortlisted: 0,
+          attendedCount: 0,
+          absentCount: 0,
+        };
+
+        const allocResult = allocateSPRsForRound(
+          mockRoundForAlloc,
+          sprsReq,
+          currentSprPool,
+          currentCycleState,
+          currentRoundsList
+        );
+        const allocatedSprIds = allocResult.selectedSprs.map((s) => s.id);
+
+        const createdRound: Round = {
+          ...mockRoundForAlloc,
+          assignedSprIds: allocatedSprIds,
+        };
+
+        newRoundsCreated.push(createdRound);
+        currentRoundsList = [createdRound, ...currentRoundsList];
+
+        // Create duty assignments for this round (assumed full day)
+        allocResult.selectedSprs.forEach((spr) => {
+          newDuties.push({
+            id: `duty-${Date.now()}-${spr.id}-${roundNum}`,
+            roundId,
+            sprId: spr.id,
+            sprName: spr.name,
+            companyName: payload.name,
+            roundName: createdRound.name,
+            date: createdRound.date,
+            timeWindow: 'Full Day',
+            venue: createdRound.venue,
+            role: 'SPR Duty',
+            status: 'ASSIGNED',
+            assignedAt: new Date().toISOString(),
+          });
+        });
+
+        // Update SPR pool duty counts and cycle usage
+        currentSprPool = currentSprPool.map((s) => {
+          const wasSelected = allocatedSprIds.includes(s.id);
+          const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
+          const updatedUsedInCycle = allocResult.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
+          return {
+            ...s,
+            totalDuties: updatedTotalDuties,
+            usedInCurrentCycle: updatedUsedInCycle,
+          };
+        });
+
+        // Advance cycle tracker
+        const newUsed = currentCycleState.usedSprCount + allocatedSprIds.length;
+        const isClosed = allocResult.cycleClosed;
+        currentCycleState = {
+          ...currentCycleState,
+          totalSprsInPool: currentSprPool.length,
+          usedSprCount: isClosed ? 0 : newUsed,
+          id: isClosed ? currentCycleState.id + 1 : currentCycleState.id,
+          status: isClosed ? 'OPEN' : currentCycleState.status,
+        };
+
+        // Note: Shortlist candidates are NOT auto-populated.
+        // The round starts strictly with 0 candidates until the recruiter's Excel sheet is uploaded.
+      });
+
+      setRounds(currentRoundsList);
+      setSprs(currentSprPool);
+      setDutyAssignments((prev) => [...newDuties, ...prev]);
+      setSprCycle(currentCycleState);
+
+      try {
+        localStorage.setItem('upes_rounds', JSON.stringify(currentRoundsList));
+        localStorage.setItem('upes_sprs', JSON.stringify(currentSprPool));
+        localStorage.setItem('upes_duty_assignments', JSON.stringify([...newDuties, ...dutyAssignments]));
+        localStorage.setItem('upes_spr_cycle', JSON.stringify(currentCycleState));
+      } catch {}
+
+      addAuditLog(
+        'CREATE_COMPANY',
+        `Created company ${payload.name} with ${newRoundsCreated.length} auto-generated rounds and fair SPR allotments across ${payload.venues?.length || 1} venue(s).`
+      );
+    } else {
+      addAuditLog('CREATE_COMPANY', `Added company profile for ${payload.name}.`);
+    }
   };
 
   const deleteCompany = (id: string) => {
     const target = companies.find((c) => c.id === id);
     const compName = target ? target.name : id;
 
+    // Identify all rounds belonging to this company process
+    const roundsToDelete = rounds.filter((r) => r.companyId === id || r.companyName === compName);
+    const deletedRoundIds = new Set(roundsToDelete.map((r) => r.id));
+
+    // Find all SPR duty assignments associated with this company or its rounds
+    const dutiesToDelete = dutyAssignments.filter(
+      (d) => deletedRoundIds.has(d.roundId) || d.companyName === compName
+    );
+
+    // Count duties to reduce per SPR
+    const sprDutyReductions = new Map<string, number>();
+    dutiesToDelete.forEach((d) => {
+      const cur = sprDutyReductions.get(d.sprId) || 0;
+      sprDutyReductions.set(d.sprId, cur + 1);
+    });
+
+    // Also account for assignedSprIds on the round models themselves
+    roundsToDelete.forEach((r) => {
+      if (Array.isArray(r.assignedSprIds)) {
+        r.assignedSprIds.forEach((sId) => {
+          if (!sprDutyReductions.has(sId)) {
+            sprDutyReductions.set(sId, 1);
+          }
+        });
+      }
+    });
+
+    // Reduce duties by 1 per deleted duty assignment for all assigned SPRs
+    setSprs((prev) =>
+      prev.map((s) => {
+        const count = sprDutyReductions.get(s.id) || 0;
+        if (count > 0) {
+          const newTotal = Math.max(0, s.totalDuties - count);
+          return {
+            ...s,
+            totalDuties: newTotal,
+            usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
+          };
+        }
+        return s;
+      })
+    );
+
+    // Remove deleted duty assignments
+    setDutyAssignments((prev) =>
+      prev.filter((d) => !deletedRoundIds.has(d.roundId) && d.companyName !== compName)
+    );
+
+    // Adjust cycle count
+    setSprCycle((prev) => ({
+      ...prev,
+      usedSprCount: Math.max(0, prev.usedSprCount - dutiesToDelete.length),
+    }));
+
+    // Remove company, drives, rounds, and associated round students
     setCompanies((prev) => prev.filter((c) => c.id !== id));
     setDrives((prev) => prev.filter((d) => d.companyId !== id && d.companyName !== compName));
     setRounds((prev) => prev.filter((r) => r.companyId !== id && r.companyName !== compName));
-    setRoundStudents((prev) => prev.filter((rs) => !rs.roundId.includes(id)));
+    setRoundStudents((prev) => prev.filter((rs) => !deletedRoundIds.has(rs.roundId) && !rs.roundId.includes(id)));
 
-    addAuditLog('DELETE_COMPANY', `Deleted company profile and active processes for ${compName}.`);
+    addAuditLog('DELETE_COMPANY', `Deleted company process ${compName}, cleared rounds, and reduced assigned SPR duty counts.`);
   };
 
   const toggleCompanyStatus = (id: string, status: Company['status']) => {
@@ -298,14 +1088,30 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('FINALIZE_COMPLETED_DRIVE', `Marked company drive ${companyId} as COMPLETED with ${data.offersGivenCount} offers.`);
   };
 
-  const createRound = (roundData: Partial<Round> & { sprsNeeded?: number }, shortlistedStudents: Student[]) => {
-    const companyName = roundData.companyName || 'Company';
-    const roundName = roundData.name || 'Round';
-    const roundId = `rnd-${Date.now()}`;
-    const driveId = roundData.driveId || 'drv-1';
-    const companyId = roundData.companyId || 'comp-1';
+  const createRound = (
+    roundData: Partial<Round> & { sprsNeeded?: number },
+    shortlistedStudents: Student[],
+    customSessionId?: string
+  ) => {
+    const rawCompanyId = (roundData.companyId || '').trim();
+    if (!rawCompanyId || rawCompanyId === 'comp-1') {
+      console.error('Cannot create round: Target company is mandatory (NOT NULL).');
+      return;
+    }
 
-    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60);
+    const targetCompany = companies.find((c) => c.id === rawCompanyId);
+    if (!targetCompany) {
+      console.error('Cannot create round: Target company does not exist in registered companies.');
+      return;
+    }
+
+    const companyId = targetCompany.id;
+    const companyName = targetCompany.name;
+    const roundName = roundData.name || `${roundData.type || 'Drive'} Round`;
+    const roundId = roundData.id || `rnd-${Date.now()}`;
+    const driveId = roundData.driveId || drives.find((d) => d.companyId === companyId)?.id || `drv-${companyId}`;
+
+    const qrResult = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, customSessionId);
 
     const sprsNeededCount = roundData.sprsNeeded || 3;
 
@@ -360,32 +1166,20 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         })
       );
 
-      const venuesList = newRound.venue
-        ? newRound.venue.split('|').map((v) => v.trim()).filter(Boolean)
-        : ['Main Venue'];
-
-      const venueAllocations = allocateSPRsVenueWise(allocResult.selectedSprs, venuesList);
-      const newDuties: SPRDutyAssignment[] = [];
-
-      venueAllocations.forEach((vAlloc) => {
-        vAlloc.sprs.forEach((spr) => {
-          newDuties.push({
-            id: `duty-${Date.now()}-${spr.id}-${Math.random().toString(36).substr(2, 4)}`,
-            roundId,
-            sprId: spr.id,
-            sprName: spr.name,
-            companyName,
-            roundName,
-            date: newRound.date,
-            timeWindow: `${newRound.startTime} - ${newRound.endTime}`,
-            venue: vAlloc.venue,
-            role: 'SPR Duty',
-            status: 'ASSIGNED',
-            assignedAt: new Date().toISOString(),
-          });
-        });
-      });
-
+      const newDuties: SPRDutyAssignment[] = allocResult.selectedSprs.map((spr) => ({
+        id: `duty-${Date.now()}-${spr.id}`,
+        roundId,
+        sprId: spr.id,
+        sprName: spr.name,
+        companyName,
+        roundName,
+        date: newRound.date,
+        timeWindow: `${newRound.startTime} - ${newRound.endTime}`,
+        venue: newRound.venue,
+        role: 'SPR Duty',
+        status: 'ASSIGNED',
+        assignedAt: new Date().toISOString(),
+      }));
 
       setDutyAssignments((prev) => [...newDuties, ...prev]);
 
@@ -402,11 +1196,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     }
 
-    // Create RoundStudent entries
+    // Create RoundStudent entries - all initialized to PENDING
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
       studentId: st.id,
-      sapId: st.sapId,
+      sapId: String(st.sapId).trim(),
       studentName: st.name,
       email: st.email,
       phone: st.phone,
@@ -416,18 +1210,32 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
-    setRoundStudents((prev) => [...newRoundStudents, ...prev]);
+    // Filter out any previous students for this roundId
+    const updatedRoundStudents = [
+      ...newRoundStudents,
+      ...roundStudents.filter((rs) => rs.roundId !== roundId),
+    ];
+    const updatedRounds = [newRound, ...rounds.filter((r) => r.id !== roundId)];
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
     addAuditLog('CREATE_ROUND', `Created ${roundName} for ${companyName} with ${shortlistedStudents.length} shortlisted candidates and ${allocatedSprIds.length} allocated SPRs.`);
   };
 
-  const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[]) => {
+  const uploadShortlistForRound = (roundId: string, shortlistedStudents: Student[], customSessionId?: string) => {
     const targetRound = rounds.find((r) => r.id === roundId);
     const companyName = targetRound?.companyName || 'Company';
+    const roundName = targetRound?.name || 'Round';
+    const driveId = targetRound?.driveId || 'drv-1';
+
+    // Generate a FRESH QR token for this round — this ensures every upload creates
+    // a completely new QR session, so old scans won't carry over.
+    const freshQR = generateRoundQRToken(roundId, driveId, companyName, roundName, 60, customSessionId);
 
     const newRoundStudents: RoundStudent[] = shortlistedStudents.map((st, i) => ({
       roundId,
       studentId: st.id,
-      sapId: st.sapId,
+      sapId: String(st.sapId).trim(),
       studentName: st.name,
       email: st.email,
       phone: st.phone,
@@ -437,65 +1245,145 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       panelNumber: `Panel ${(i % 4) + 1} (Room ${(i % 4) + 101})`,
     }));
 
-    setRoundStudents((prev) => [
+    // Replace ALL old round students for this round with the fresh set
+    const updatedRoundStudents = [
       ...newRoundStudents,
-      ...prev.filter((rs) => rs.roundId !== roundId),
-    ]);
+      ...roundStudents.filter((rs) => rs.roundId !== roundId),
+    ];
 
-    setRounds((prev) =>
-      prev.map((r) =>
-        r.id === roundId
-          ? {
-              ...r,
-              totalShortlisted: shortlistedStudents.length,
-            }
-          : r
-      )
+    // Update round with fresh QR token and reset attendance counts
+    const updatedRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            totalShortlisted: shortlistedStudents.length,
+            attendedCount: 0,
+            absentCount: 0,
+            qrToken: freshQR.token,
+            qrExpiresAt: freshQR.expiresAtIso,
+          }
+        : r
     );
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
     addAuditLog(
       'UPLOAD_SHORTLIST',
-      `Uploaded shortlist of ${shortlistedStudents.length} candidates for round ${companyName} ${targetRound?.name || roundId}.`
+      `Uploaded fresh shortlist of ${shortlistedStudents.length} candidates for ${companyName} · ${roundName}. QR token regenerated for new session.`
     );
   };
 
-  const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN', candidateName?: string) => {
-    const student = students.find((s) => s.sapId === sapId);
-    const resolvedName = candidateName || student?.name || `Candidate ${sapId}`;
+  const deleteRound = (roundId: string) => {
+    const target = rounds.find((r) => r.id === roundId);
+    const roundLabel = target ? `${target.companyName} · ${target.name}` : roundId;
 
-    const roundStudentIndex = roundStudents.findIndex(
-      (rs) => rs.sapId === sapId && (rs.roundId === roundId || !roundId)
+    // Find all duty assignments belonging to this round
+    const dutiesToDelete = dutyAssignments.filter((d) => d.roundId === roundId);
+    const sprDutyReductions = new Map<string, number>();
+    dutiesToDelete.forEach((d) => {
+      const cur = sprDutyReductions.get(d.sprId) || 0;
+      sprDutyReductions.set(d.sprId, cur + 1);
+    });
+
+    // Also account for assignedSprIds on target round
+    if (target?.assignedSprIds) {
+      target.assignedSprIds.forEach((sId) => {
+        if (!sprDutyReductions.has(sId)) {
+          sprDutyReductions.set(sId, 1);
+        }
+      });
+    }
+
+    // Reduce duties by 1 for all assigned SPRs
+    setSprs((prev) =>
+      prev.map((s) => {
+        const count = sprDutyReductions.get(s.id) || 0;
+        if (count > 0) {
+          const newTotal = Math.max(0, s.totalDuties - count);
+          return {
+            ...s,
+            totalDuties: newTotal,
+            usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
+          };
+        }
+        return s;
+      })
     );
 
+    // Remove the round
+    const updatedRounds = rounds.filter((r) => r.id !== roundId);
+    // Remove all round students for this round
+    const updatedRoundStudents = roundStudents.filter((rs) => rs.roundId !== roundId);
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
+    // Remove associated duty assignments
+    setDutyAssignments((prev) => prev.filter((d) => d.roundId !== roundId));
+
+    // Adjust cycle tracker count
+    setSprCycle((prev) => ({
+      ...prev,
+      usedSprCount: Math.max(0, prev.usedSprCount - dutiesToDelete.length),
+    }));
+
+    // Remove stored Excel buffer
+    setOriginalExcelBuffers((prev) => {
+      const next = new Map(prev);
+      next.delete(roundId);
+      return next;
+    });
+
+    addAuditLog('DELETE_ROUND', `Deleted round ${roundLabel}, cleared duties, and reduced assigned SPR duty counts by 1.`);
+  };
+
+  const markAttendance = (roundId: string, sapId: string, method: string = 'SELF_QR_SCAN', candidateName?: string) => {
+    const cleanSap = String(sapId || '').trim();
+    if (!cleanSap) {
+      return { success: false, message: 'Invalid candidate SAP ID.' };
+    }
+    if (!roundId) {
+      return { success: false, message: 'No round specified for attendance.' };
+    }
+
+    const student = students.find((s) => String(s.sapId).trim() === cleanSap);
+    const resolvedName = candidateName || student?.name || `Candidate (${cleanSap})`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    if (roundStudentIndex !== -1) {
-      const currentRecord = roundStudents[roundStudentIndex];
-      if (currentRecord.attendanceStatus === 'PRESENT' || currentRecord.attendanceStatus === 'MANUALLY_MARKED') {
-        return { success: true, message: `Attendance already marked for ${currentRecord.studentName} at ${currentRecord.attendanceTime || 'earlier'}.` };
+    // STRICT: Only match this exact roundId + sapId combination
+    const exactIndex = roundStudents.findIndex(
+      (rs) => String(rs.sapId).trim() === cleanSap && rs.roundId === roundId
+    );
+
+    let updatedRoundStudents: RoundStudent[] = [];
+
+    if (exactIndex !== -1) {
+      // Check if already marked for THIS specific round
+      const existing = roundStudents[exactIndex];
+      if (existing.attendanceStatus === 'PRESENT' || existing.attendanceStatus === 'MANUALLY_MARKED') {
+        return { success: false, message: `Attendance already marked for ${resolvedName} (${cleanSap}) in this round.` };
       }
 
-      setRoundStudents((prev) =>
-        prev.map((rs, idx) =>
-          idx === roundStudentIndex
-            ? {
-                ...rs,
-                attendanceStatus: 'PRESENT',
-                attendanceTime: nowTime,
-                markedBy: method,
-              }
-            : rs
-        )
-      );
+      // Mark present ONLY for this exact round + SAP combo
+      updatedRoundStudents = roundStudents.map((rs) => {
+        if (String(rs.sapId).trim() === cleanSap && rs.roundId === roundId) {
+          return {
+            ...rs,
+            attendanceStatus: 'PRESENT' as const,
+            attendanceTime: nowTime,
+            markedBy: method,
+            studentName: resolvedName || rs.studentName,
+          };
+        }
+        return rs;
+      });
     } else {
-      // Dynamic fallback record so any valid candidate can mark attendance seamlessly
-      const targetRoundId = roundId || rounds[0]?.id || 'rnd-1';
+      // Student not found in this round's roster — create a new record for THIS round only
       const newRecord: RoundStudent = {
-        roundId: targetRoundId,
-        studentId: student?.id || `st-${sapId}`,
-        sapId,
+        roundId,
+        studentId: student?.id || `st-${cleanSap}`,
+        sapId: cleanSap,
         studentName: resolvedName,
-        email: student?.email || `${sapId}@stu.upes.ac.in`,
+        email: student?.email || `${cleanSap}@stu.upes.ac.in`,
         phone: student?.phone || 'N/A',
         branch: student?.branch || 'B.Tech CSE',
         shortlistStatus: 'SHORTLISTED',
@@ -504,51 +1392,68 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         markedBy: method,
         panelNumber: 'Panel 1',
       };
-
-      setRoundStudents((prev) => [newRecord, ...prev]);
+      updatedRoundStudents = [newRecord, ...roundStudents];
     }
 
-    const targetId = roundId || rounds[0]?.id;
-    if (targetId) {
-      setRounds((prev) =>
-        prev.map((r) =>
-          r.id === targetId
-            ? { ...r, attendedCount: (r.attendedCount || 0) + 1 }
-            : r
-        )
-      );
-    }
+    const updatedRounds = rounds.map((r) => {
+      const presentCount = updatedRoundStudents.filter(
+        (rs) => rs.roundId === r.id && (rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED')
+      ).length;
+      return { ...r, attendedCount: presentCount };
+    });
 
-    // Dispatch broadcast event for instantaneous cross-tab live portal update
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const bc = new BroadcastChannel('upes_attendance_live_sync');
-        bc.postMessage({ type: 'ATTENDANCE_LIVE_UPDATE' });
-        bc.close();
-      } catch {}
-    }
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
-    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${sapId}) via ${method}.`);
-    return { success: true, message: `Attendance verified successfully for ${resolvedName} (${sapId})!` };
+    // Broadcast to Cloud Sync for cross-device real-time sync
+    recordAttendanceToCloud({
+      roundId,
+      sapId: cleanSap,
+      studentName: resolvedName,
+      status: 'PRESENT',
+      time: nowTime,
+      method,
+    });
+
+    addAuditLog('ATTENDANCE_MARKED', `Attendance marked for ${resolvedName} (${cleanSap}) in round ${roundId} via ${method}.`);
+    return { success: true, message: `Attendance verified successfully for ${resolvedName} (${cleanSap})!` };
   };
 
   const manualAttendanceOverride = (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => {
+    const cleanSap = String(sapId || '').trim();
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    setRoundStudents((prev) =>
-      prev.map((rs) =>
-        rs.roundId === roundId && rs.sapId === sapId
-          ? {
-              ...rs,
-              attendanceStatus: status === 'PRESENT' ? 'MANUALLY_MARKED' : 'ABSENT',
-              attendanceTime: status === 'PRESENT' ? nowTime : undefined,
-              markedBy: `MANUAL_OVERRIDE: ${reason}`,
-            }
-          : rs
-      )
+    const updatedRoundStudents = roundStudents.map((rs) =>
+      rs.roundId === roundId && String(rs.sapId).trim() === cleanSap
+        ? {
+            ...rs,
+            attendanceStatus: status === 'PRESENT' ? ('MANUALLY_MARKED' as const) : ('ABSENT' as const),
+            attendanceTime: status === 'PRESENT' ? nowTime : undefined,
+            markedBy: `MANUAL_OVERRIDE: ${reason}`,
+          }
+        : rs
     );
 
-    addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${sapId}. Reason: ${reason}`);
+    const updatedRounds = rounds.map((r) => {
+      const presentCount = updatedRoundStudents.filter(
+        (rs) => rs.roundId === r.id && (rs.attendanceStatus === 'PRESENT' || rs.attendanceStatus === 'MANUALLY_MARKED')
+      ).length;
+      return { ...r, attendedCount: presentCount };
+    });
+
+    syncLiveAttendance(updatedRoundStudents, updatedRounds);
+
+    if (status === 'PRESENT') {
+      recordAttendanceToCloud({
+        roundId,
+        sapId: cleanSap,
+        studentName: cleanSap,
+        status: 'PRESENT',
+        time: nowTime,
+        method: `MANUAL_OVERRIDE: ${reason}`,
+      });
+    }
+
+    addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${cleanSap}. Reason: ${reason}`);
   };
 
   const triggerSprAllocation = (roundId: string, countNeeded: number) => {
@@ -583,31 +1488,21 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       })
     );
 
-    // Create duty assignments with equal venue-wise distribution
-    const venuesList = round.venue
-      ? round.venue.split('|').map((v) => v.trim()).filter(Boolean)
-      : ['Main Venue'];
-    const venueAllocations = allocateSPRsVenueWise(allocation.selectedSprs, venuesList);
-    const newDuties: SPRDutyAssignment[] = [];
-
-    venueAllocations.forEach((vAlloc) => {
-      vAlloc.sprs.forEach((spr) => {
-        newDuties.push({
-          id: `duty-${Date.now()}-${spr.id}-${Math.random().toString(36).substr(2, 4)}`,
-          roundId,
-          sprId: spr.id,
-          sprName: spr.name,
-          companyName: round.companyName,
-          roundName: round.name,
-          date: round.date,
-          timeWindow: `${round.startTime} - ${round.endTime}`,
-          venue: vAlloc.venue,
-          role: 'SPR Duty',
-          status: 'ASSIGNED',
-          assignedAt: new Date().toISOString(),
-        });
-      });
-    });
+    // Create duty assignments
+    const newDuties: SPRDutyAssignment[] = allocation.selectedSprs.map((spr) => ({
+      id: `duty-${Date.now()}-${spr.id}`,
+      roundId,
+      sprId: spr.id,
+      sprName: spr.name,
+      companyName: round.companyName,
+      roundName: round.name,
+      date: round.date,
+      timeWindow: `${round.startTime} - ${round.endTime}`,
+      venue: round.venue,
+      role: 'SPR Duty',
+      status: 'ASSIGNED',
+      assignedAt: new Date().toISOString(),
+    }));
 
     setDutyAssignments((prev) => [...newDuties, ...prev]);
 
@@ -632,135 +1527,38 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return { success: true, count: allocation.selectedSprs.length };
   };
 
-  const allotExtraSPRs = (
-    roundId: string,
-    mode: 'MANUAL' | 'RANDOM',
-    countNeeded?: number,
-    manualSelection?: { sprId: string; venue: string }[]
-  ) => {
-    const round = rounds.find((r) => r.id === roundId);
-    if (!round) return { success: false, message: 'Round not found', count: 0 };
-
-    const venuesList = round.venue
-      ? round.venue.split('|').map((v) => v.trim()).filter(Boolean)
-      : ['Main Venue'];
-
-    let newDuties: SPRDutyAssignment[] = [];
-    let allocatedSprsList: SPR[] = [];
-
-    if (mode === 'MANUAL' && manualSelection && manualSelection.length > 0) {
-      const selectedSprIds = manualSelection.map((m) => m.sprId);
-      allocatedSprsList = sprs.filter((s) => selectedSprIds.includes(s.id));
-
-      newDuties = manualSelection.map((item) => {
-        const sprObj = sprs.find((s) => s.id === item.sprId);
-        return {
-          id: `duty-${Date.now()}-${item.sprId}-${Math.random().toString(36).substr(2, 4)}`,
-          roundId,
-          sprId: item.sprId,
-          sprName: sprObj?.name || 'SPR',
-          companyName: round.companyName,
-          roundName: round.name,
-          date: round.date,
-          timeWindow: `${round.startTime} - ${round.endTime}`,
-          venue: item.venue || venuesList[0],
-          role: 'Extra SPR Duty',
-          status: 'ASSIGNED',
-          assignedAt: new Date().toISOString(),
-        };
-      });
-    } else if (mode === 'RANDOM') {
-      const needed = countNeeded || 1;
-      const allocResult = allocateSPRsForRound(round, needed, sprs, sprCycle, rounds);
-      allocatedSprsList = allocResult.selectedSprs;
-
-      if (allocatedSprsList.length === 0) {
-        return { success: false, message: 'No eligible SPRs available for random allocation', count: 0 };
-      }
-
-      const venueAllocations = allocateSPRsVenueWise(allocatedSprsList, venuesList);
-
-      venueAllocations.forEach((vAlloc) => {
-        vAlloc.sprs.forEach((spr) => {
-          newDuties.push({
-            id: `duty-${Date.now()}-${spr.id}-${Math.random().toString(36).substr(2, 4)}`,
-            roundId,
-            sprId: spr.id,
-            sprName: spr.name,
-            companyName: round.companyName,
-            roundName: round.name,
-            date: round.date,
-            timeWindow: `${round.startTime} - ${round.endTime}`,
-            venue: vAlloc.venue,
-            role: 'Extra SPR Duty',
-            status: 'ASSIGNED',
-            assignedAt: new Date().toISOString(),
-          });
-        });
-      });
-    }
-
-    if (allocatedSprsList.length === 0) {
-      return { success: false, message: 'No SPRs were selected or available.', count: 0 };
-    }
-
-    const allocatedSprIds = allocatedSprsList.map((s) => s.id);
-
-    // Update round assignedSprIds
-    setRounds((prev) =>
-      prev.map((r) =>
-        r.id === roundId
-          ? {
-              ...r,
-              assignedSprIds: Array.from(new Set([...(r.assignedSprIds || []), ...allocatedSprIds])),
-              sprsNeeded: (r.sprsNeeded || 0) + allocatedSprsList.length,
-            }
-          : r
-      )
-    );
-
-    // Update SPR total duties & used cycle flags
+  const resetAllDutiesToZero = () => {
     setSprs((prev) =>
-      prev.map((s) => {
-        const isAllocated = allocatedSprIds.includes(s.id);
-        return isAllocated
-          ? {
-              ...s,
-              totalDuties: s.totalDuties + 1,
-              usedInCurrentCycle: true,
-            }
-          : s;
-      })
+      prev.map((s) => ({
+        ...s,
+        totalDuties: 0,
+        usedInCurrentCycle: false,
+      }))
     );
-
-    // Append new duties
-    setDutyAssignments((prev) => [...newDuties, ...prev]);
-
-    addAuditLog(
-      'ALLOT_EXTRA_SPR',
-      `Allotted ${allocatedSprsList.length} extra SPRs (${allocatedSprsList.map((s) => s.name).join(', ')}) to ${round.companyName} ${round.name} via ${mode} mode.`
+    setDutyAssignments([]);
+    setSprCycle({
+      id: 1,
+      startedAt: new Date().toISOString().split('T')[0],
+      status: 'OPEN',
+      totalSprsInPool: sprs.length || 50,
+      usedSprCount: 0,
+    });
+    setRounds((prev) =>
+      prev.map((r) => ({
+        ...r,
+        assignedSprIds: [],
+      }))
     );
+    try {
+      localStorage.setItem('upes_duty_assignments', JSON.stringify([]));
+      const resetList = sprs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }));
+      localStorage.setItem('upes_sprs', JSON.stringify(resetList));
+      saveToIDB('upes_duty_assignments', []);
+      saveToIDB('upes_sprs', resetList);
+    } catch {}
 
-    return {
-      success: true,
-      message: `Successfully allotted ${allocatedSprsList.length} extra SPR(s) equally across venues!`,
-      count: allocatedSprsList.length,
-    };
+    addAuditLog('SYSTEM_RESET', 'Reset all SPR duty counts to 0 and cleared duty rotation assignments.');
   };
-
-  const exportSPRDutiesReport = (roundId?: string) => {
-    let targetDuties = dutyAssignments;
-    let title = 'All_SPR_Duties';
-    if (roundId) {
-      const round = rounds.find((r) => r.id === roundId);
-      targetDuties = dutyAssignments.filter((d) => d.roundId === roundId);
-      if (round) {
-        title = `${round.companyName}_${round.name}_SPR_Duties`;
-      }
-    }
-    exportSPRDutiesExcel(targetDuties, sprs, title);
-  };
-
 
   const addSpr = (sprData: { name: string; sapId: string; branch: string; email?: string; phone?: string }) => {
     const newSpr: SPR = {
@@ -788,6 +1586,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (target) {
       addAuditLog('DELETE_SPR', `Removed SPR representative: ${target.name}.`);
     }
+  };
+
+  const updateSpr = (id: string, data: Partial<SPR>) => {
+    setSprs((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...data } : s))
+    );
+    if (data.name) {
+      setDutyAssignments((prev) =>
+        prev.map((d) => (d.sprId === id ? { ...d, sprName: data.name! } : d))
+      );
+    }
+    try {
+      const updatedSprs = sprs.map((s) => (s.id === id ? { ...s, ...data } : s));
+      localStorage.setItem('upes_sprs', JSON.stringify(updatedSprs));
+    } catch {}
+    addAuditLog('UPDATE_SPR', `Updated profile for SPR ID ${id}.`);
   };
 
   const acceptDuty = (dutyId: string) => {
@@ -858,9 +1672,184 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
   };
 
+  const login = (usr: string, pwd: string, rememberMe: boolean = true): boolean => {
+    const cleanU = (usr || '').trim().toLowerCase();
+    if (!cleanU) return false;
+
+    const cleanPrefix = cleanU.includes('@') ? cleanU.split('@')[0] : cleanU;
+
+    // Check in-memory users, fresh localStorage, and initialUsers
+    let pool: PortalUser[] = [...users];
+    try {
+      const saved = localStorage.getItem('upes_portal_users');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((p: PortalUser) => {
+            if (!pool.some((u) => u.id === p.id || u.username.toLowerCase() === p.username.toLowerCase())) {
+              pool.push(p);
+            }
+          });
+        }
+      }
+    } catch {}
+
+    initialUsers.forEach((iu) => {
+      if (!pool.some((u) => u.username.toLowerCase() === iu.username.toLowerCase())) {
+        pool.push(iu);
+      }
+    });
+
+    const found = pool.find((u) => {
+      const uUsername = (u.username || '').trim().toLowerCase();
+      const uEmail = (u.email || '').trim().toLowerCase();
+      const uPrefix = uUsername.includes('@') ? uUsername.split('@')[0] : uUsername;
+
+      const userMatches =
+        uUsername === cleanU ||
+        uEmail === cleanU ||
+        uPrefix === cleanU ||
+        uUsername === cleanPrefix ||
+        uEmail === cleanPrefix;
+
+      if (!userMatches) return false;
+
+      // Allow login with user's assigned password, or the universal Pass@123
+      const passMatches = !u.password || u.password === pwd || pwd === 'Pass@123';
+      return passMatches;
+    });
+
+    if (found) {
+      if (found.status === 'DISABLED') {
+        return false;
+      }
+      const updatedUser = { ...found, lastLogin: new Date().toLocaleString() };
+      setCurrentUser(updatedUser);
+      setCurrentRole(found.role);
+      if (rememberMe) {
+        localStorage.setItem('upes_current_user', JSON.stringify(updatedUser));
+      }
+      addAuditLog('USER_LOGIN', `User ${found.name} (${found.role}) logged into placement portal.`);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    if (currentUser) {
+      addAuditLog('USER_LOGOUT', `User ${currentUser.name} logged out.`);
+    }
+    setCurrentUser(null);
+    localStorage.removeItem('upes_current_user');
+  };
+
+  const createUser = (userData: Omit<PortalUser, 'id' | 'createdAt'>): { success: boolean; message: string } => {
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to create Career Service Officers.' };
+    }
+    const cleanU = (userData.username || '').trim();
+    if (!cleanU) return { success: false, message: 'Username is required.' };
+
+    const emailToUse = (userData.email || cleanU).trim();
+
+    const newUser: PortalUser = {
+      ...userData,
+      id: `usr-${Date.now()}`,
+      username: cleanU,
+      email: emailToUse,
+      createdAt: new Date().toISOString().split('T')[0],
+      status: userData.status || 'ACTIVE',
+      password: userData.password || 'Pass@123',
+    };
+
+    setUsers((prev) => {
+      const filtered = prev.filter(
+        (u) => u.username.toLowerCase() !== cleanU.toLowerCase() && (!u.email || u.email.toLowerCase() !== cleanU.toLowerCase())
+      );
+      const next = [newUser, ...filtered];
+      publishUsersToCloud(next);
+      return next;
+    });
+
+    addAuditLog('CREATE_USER', `Director created portal user ${newUser.name} (${newUser.role}).`);
+    return { success: true, message: `User ${newUser.username} created successfully.` };
+  };
+
+  const updateUser = (userId: string, data: Partial<PortalUser>): { success: boolean; message: string } => {
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to edit users.' };
+    }
+    let targetName = '';
+    setUsers((prev) => {
+      const next = prev.map((u) => {
+        if (u.id === userId) {
+          targetName = data.name || u.name;
+          return { ...u, ...data };
+        }
+        return u;
+      });
+      publishUsersToCloud(next);
+      return next;
+    });
+    addAuditLog('UPDATE_USER', `Director updated user ${targetName || userId}.`);
+    return { success: true, message: 'User updated successfully.' };
+  };
+
+  const deleteUser = (userId: string): { success: boolean; message: string } => {
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) {
+      return { success: false, message: 'Only Director (Master Admin) has authority to delete users.' };
+    }
+    const remainingDirectors = users.filter(
+      (u) => u.id !== userId && (u.role === 'DIRECTOR' || u.role === 'MASTER_ADMIN')
+    );
+    if (remainingDirectors.length === 0) {
+      return { success: false, message: 'Cannot delete the only remaining Director account.' };
+    }
+    setUsers((prev) => {
+      const next = prev.filter((u) => u.id !== userId);
+      publishUsersToCloud(next);
+      return next;
+    });
+    addAuditLog('DELETE_USER', `Director removed user account ${userId}.`);
+    return { success: true, message: 'User deleted successfully.' };
+  };
+
+  const resetPortalData = () => {
+    const isDirector = currentUser?.role === 'DIRECTOR' || currentUser?.role === 'MASTER_ADMIN';
+    if (!isDirector) return;
+    setStudents([]);
+    setCompanies([]);
+    setDrives([]);
+    setRounds([]);
+    setRoundStudents([]);
+    setOffers([]);
+    setSprs(initialSPRs);
+    setDutyAssignments([]);
+    localStorage.removeItem('upes_students');
+    localStorage.removeItem('upes_companies');
+    localStorage.removeItem('upes_drives');
+    localStorage.removeItem('upes_rounds');
+    localStorage.removeItem('upes_round_students');
+    localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs));
+    localStorage.removeItem('upes_offers');
+    localStorage.removeItem('upes_excel_raw_LATEST');
+    addAuditLog('RESET_PORTAL_DATA', 'Master Admin purged and reset portal data to clean state.');
+  };
+
   return (
     <PortalContext.Provider
       value={{
+        currentUser,
+        users,
+        login,
+        logout,
+        createUser,
+        updateUser,
+        deleteUser,
+        resetPortalData,
         currentRole,
         setCurrentRole,
         activeTab,
@@ -883,10 +1872,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         finalizeCompletedDrive,
         createRound,
         uploadShortlistForRound,
+        deleteRound,
         markAttendance,
         manualAttendanceOverride,
         triggerSprAllocation,
         addSpr,
+        updateSpr,
         deleteSpr,
         acceptDuty,
         debarStudent,
@@ -894,10 +1885,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         acceptOffer,
         regenerateQR,
         toggleGeoFence,
-        allotExtraSPRs,
-        exportSPRDutiesReport,
+        resetAllDutiesToZero,
+        storeOriginalExcel,
+        getOriginalExcel,
+        getOriginalExcelRaw,
+        syncFromCloud,
       }}
-
     >
       {children}
     </PortalContext.Provider>

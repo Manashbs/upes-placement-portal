@@ -1,101 +1,231 @@
 import React, { useState } from 'react';
-import { usePortal } from '../../context/PortalContext';
-import { Search, Download, Plus, ArrowUpRight, SlidersHorizontal, Trash2, CheckCircle2, MessageSquare } from 'lucide-react';
-import { Company, Round } from '../../types';
+import { usePortal, RoundConfigInput } from '../../context/PortalContext';
 import { CompanyProfileView } from './CompanyProfileView';
+import {
+  Search,
+  Download,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  Calendar,
+  MapPin,
+  Users,
+  Sparkles,
+  UserCheck,
+  Building2,
+  Layers,
+  ArrowUpRight,
+} from 'lucide-react';
+import { Company, Round } from '../../types';
 import * as XLSX from 'xlsx';
 
+interface RoundFormItem {
+  name: string;
+  date: string;
+  venues: string[];
+  sprsNeeded: number;
+}
+
 export const CompaniesView: React.FC = () => {
-  const { companies, addCompany, deleteCompany, rounds, offers } = usePortal();
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeFilterTab, setActiveFilterTab] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'COMPLETED'>('ALL');
+  const { companies, addCompany, deleteCompany, rounds, sprs, setActiveTab } = usePortal();
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [createdCompanyNotice, setCreatedCompanyNotice] = useState<string | null>(null);
 
-  // Detailed Form State
+  // Form State: Company details
   const [newCompName, setNewCompName] = useState('');
-  const [newCompIndustry, setNewCompIndustry] = useState('Technology');
-  const [newCompCategory, setNewCompCategory] = useState<Company['category']>('DREAM');
-  const [newCompCtc, setNewCompCtc] = useState<number>(18.0);
-  const [newCompDesc, setNewCompDesc] = useState('');
-  const [newCompRoles, setNewCompRoles] = useState('Software Engineer, Product Analyst');
-  const [minCgpa, setMinCgpa] = useState<number>(7.5);
-  const [maxBacklogs, setMaxBacklogs] = useState<number>(0);
+  const [driveDate, setDriveDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
-  if (selectedCompany) {
+  // Rounds State with venue setup directly inside each round
+  const [totalRounds, setTotalRounds] = useState<number>(3);
+  const [roundsList, setRoundsList] = useState<RoundFormItem[]>([
+    {
+      name: 'Round 1: Online Assessment / PPT',
+      date: new Date().toISOString().split('T')[0],
+      venues: ['Block A - Audi 1'],
+      sprsNeeded: 3,
+    },
+    {
+      name: 'Round 2: Technical Interview',
+      date: new Date().toISOString().split('T')[0],
+      venues: ['Block B - Lab 204'],
+      sprsNeeded: 2,
+    },
+    {
+      name: 'Round 3: HR & Management Interview',
+      date: new Date().toISOString().split('T')[0],
+      venues: ['Block A - Audi 1'],
+      sprsNeeded: 2,
+    },
+  ]);
+
+  const handleTotalRoundsChange = (count: number) => {
+    const valid = Math.max(1, Math.min(8, count));
+    setTotalRounds(valid);
+    setRoundsList((prev) => {
+      const updated = [...prev];
+      while (updated.length < valid) {
+        const rNum = updated.length + 1;
+        const defaultName =
+          rNum === 1
+            ? 'Round 1: Online Assessment'
+            : rNum === 2
+            ? 'Round 2: Technical Interview'
+            : `Round ${rNum}: HR / Final Interview`;
+        const defaultVenue = `Block ${String.fromCharCode(65 + ((rNum - 1) % 26))} - Lab ${rNum}`;
+        updated.push({
+          name: defaultName,
+          date: driveDate || new Date().toISOString().split('T')[0],
+          venues: [defaultVenue],
+          sprsNeeded: 2,
+        });
+      }
+      return updated.slice(0, valid);
+    });
+  };
+
+
+  const updateRoundField = (roundIdx: number, field: keyof RoundFormItem, value: any) => {
+    setRoundsList((prev) => {
+      const copy = [...prev];
+      copy[roundIdx] = { ...copy[roundIdx], [field]: value };
+      return copy;
+    });
+  };
+
+  const handleVenueChange = (roundIdx: number, venueIdx: number, val: string) => {
+    setRoundsList((prev) => {
+      const copy = [...prev];
+      const rVenues = [...copy[roundIdx].venues];
+      rVenues[venueIdx] = val;
+      copy[roundIdx] = { ...copy[roundIdx], venues: rVenues };
+      return copy;
+    });
+  };
+
+  const addVenueToRound = (roundIdx: number) => {
+    setRoundsList((prev) => {
+      const copy = [...prev];
+      const rVenues = [...copy[roundIdx].venues];
+      rVenues.push(`Venue ${rVenues.length + 1}`);
+      copy[roundIdx] = { ...copy[roundIdx], venues: rVenues };
+      return copy;
+    });
+  };
+
+  const removeVenueFromRound = (roundIdx: number, venueIdx: number) => {
+    setRoundsList((prev) => {
+      const copy = [...prev];
+      const rVenues = copy[roundIdx].venues.filter((_, i) => i !== venueIdx);
+      copy[roundIdx] = {
+        ...copy[roundIdx],
+        venues: rVenues.length > 0 ? rVenues : ['Campus Venue 1'],
+      };
+      return copy;
+    });
+  };
+
+  const filteredCompanies = companies.filter((comp) => {
+    return (
+      comp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rounds.some(
+        (r) =>
+          (r.companyId === comp.id || r.companyName === comp.name) &&
+          r.venue.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+    );
+  });
+
+  const totalAllottedSprsNeeded = roundsList.reduce(
+    (acc, r) => acc + (Number(r.sprsNeeded) || 2),
+    0
+  );
+
+  const handleExportRoster = () => {
+    const exportData: any[] = [];
+    companies.forEach((comp) => {
+      const compRounds = rounds.filter((r) => r.companyId === comp.id || r.companyName === comp.name);
+      compRounds.forEach((rnd) => {
+        const assignedSprNames = (rnd.assignedSprIds || [])
+          .map((id) => sprs.find((s) => s.id === id)?.name || id)
+          .join(', ');
+
+        exportData.push({
+          Company: comp.name,
+          'Round Name': rnd.name,
+          Date: rnd.date,
+          Venue: rnd.venue,
+          'Assigned SPRs': assignedSprNames || 'None',
+          'Candidates Attended': `${rnd.attendedCount || 0} / ${rnd.totalShortlisted || 0}`,
+        });
+      });
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'SPR Allotments & Attendance');
+    XLSX.writeFile(workbook, 'UPES_SPR_Allotment_Roster.xlsx');
+  };
+
+  const handleCreateCompanySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCompName.trim()) return;
+
+    const formattedRounds: RoundConfigInput[] = roundsList.map((r) => ({
+      name: r.name.trim(),
+      venues: r.venues.filter(Boolean),
+      venue: r.venues.filter(Boolean).join(', '),
+      date: r.date || driveDate,
+      sprsNeeded: r.sprsNeeded,
+    }));
+
+    addCompany({
+      name: newCompName.trim(),
+      driveDate,
+      roundsConfig: formattedRounds,
+    });
+
+    setCreatedCompanyNotice(
+      `Company "${newCompName.trim()}" created! ${roundsList.length} rounds and ${totalAllottedSprsNeeded} SPR duties allotted in a fair cycle.`
+    );
+    setShowAddModal(false);
+    setNewCompName('');
+    setTimeout(() => setCreatedCompanyNotice(null), 8000);
+  };
+
+  const handleOpenRoundAttendance = (roundId: string) => {
+    try {
+      sessionStorage.setItem('upes_active_round_id', roundId);
+    } catch {}
+    setActiveTab('attendance');
+  };
+
+  // Synchronize activeCompany with latest context state
+  const activeCompany = selectedCompany ? (companies.find((c) => c.id === selectedCompany.id) || selectedCompany) : null;
+
+  if (activeCompany) {
     return (
       <CompanyProfileView
-        company={selectedCompany}
+        company={activeCompany}
         onBack={() => setSelectedCompany(null)}
       />
     );
   }
 
-  const filteredCompanies = companies.filter((comp) => {
-    const matchesSearch =
-      comp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      comp.industry.toLowerCase().includes(searchTerm.toLowerCase());
-
-    if (activeFilterTab === 'ALL') return matchesSearch;
-    if (activeFilterTab === 'ACTIVE') return matchesSearch && comp.status === 'ACTIVE';
-    if (activeFilterTab === 'PENDING') return matchesSearch && comp.status === 'PENDING';
-    if (activeFilterTab === 'COMPLETED') return matchesSearch && comp.status === 'COMPLETED';
-    return matchesSearch;
-  });
-
-  const handleExportDirectory = () => {
-    const exportData = companies.map((c, i) => ({
-      'S.No': i + 1,
-      'Company Name': c.name,
-      Category: c.category,
-      Industry: c.industry,
-      'Total CTC (LPA)': c.ctcTotal,
-      Status: c.status,
-      'Active Drives': c.activeDrivesCount,
-      'Eligible Students': c.eligibleStudentsCount,
-      'HR Contact': `${c.hrContact.name} (${c.hrContact.email})`,
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Recruiter Directory');
-    XLSX.writeFile(workbook, 'UPES_Recruiter_Directory_2026.xlsx');
-  };
-
-  const handleCreateCompanySubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCompName) return;
-
-    const rolesList = newCompRoles.split(',').map((r) => r.trim()).filter(Boolean);
-
-    addCompany({
-      name: newCompName,
-      industry: newCompIndustry || 'Technology',
-      category: newCompCategory,
-      ctcTotal: Number(newCompCtc),
-      description: newCompDesc || 'Partner organization participating in UPES placement season drives.',
-      rolesOffered: rolesList.length > 0 ? rolesList : ['Software Engineer'],
-      minCgpa: Number(minCgpa),
-      maxBacklogs: Number(maxBacklogs),
-    });
-
-    setShowAddModal(false);
-    setNewCompName('');
-  };
-
   return (
     <div className="space-y-8 select-none pb-12">
-      {/* Header matching Screenshot 2 */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase mb-1">
-            RECRUITER NETWORK
+            RECRUITMENT DRIVES & SPR ALLOTMENT
           </div>
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">
             Companies
           </h2>
           <p className="text-sm font-medium text-slate-500 max-w-3xl">
-            Keep every recruiter relationship and active drive visible to the placement team.
+            Configure companies with selection rounds and round venues to automatically allot SPRs in a fair rotation.
           </p>
         </div>
 
@@ -109,328 +239,488 @@ export const CompaniesView: React.FC = () => {
           </button>
 
           <button
-            onClick={handleExportDirectory}
+            onClick={handleExportRoster}
             className="inline-flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 text-sm font-bold px-4 py-2.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
           >
             <Download className="w-4 h-4 text-slate-600" />
-            <span>Export directory</span>
+            <span>Export Roster</span>
           </button>
         </div>
       </div>
 
-      {/* Filter and Search Bar matching Screenshot 2 */}
-      <div className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-        {/* Search Input */}
-        <div className="relative w-full md:w-80">
+      {/* Success Notification Banner */}
+      {createdCompanyNotice && (
+        <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl flex items-center justify-between shadow-xs animate-in fade-in">
+          <div className="flex items-center space-x-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span className="text-sm font-bold text-emerald-900">{createdCompanyNotice}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setActiveTab('attendance')}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+            >
+              Mark Attendance
+            </button>
+            <button
+              onClick={() => setActiveTab('spr-rotation')}
+              className="bg-white hover:bg-slate-100 text-emerald-900 border border-emerald-300 text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+            >
+              View SPR Duties
+            </button>
+            <button
+              onClick={() => setCreatedCompanyNotice(null)}
+              className="text-emerald-700 hover:text-emerald-900 text-sm font-bold p-1"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Search Bar */}
+      <div className="bg-white rounded-2xl p-3 border border-slate-200/80 shadow-xs flex items-center justify-between">
+        <div className="relative w-full max-w-md">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by company..."
-            className="w-full bg-slate-50 text-slate-900 text-sm rounded-xl pl-10 pr-4 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+            placeholder="Search by company or venue..."
+            className="w-full bg-slate-50 text-slate-900 text-sm rounded-xl pl-10 pr-4 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-medium"
           />
         </div>
-
-        {/* Tab Pills matching Screenshot 2 */}
-        <div className="flex items-center space-x-2 overflow-x-auto w-full md:w-auto">
-          {[
-            { id: 'ALL', label: 'All companies' },
-            { id: 'ACTIVE', label: 'Active' },
-            { id: 'PENDING', label: 'Pending' },
-            { id: 'COMPLETED', label: 'Completed' },
-          ].map((tab) => {
-            const isActive = activeFilterTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveFilterTab(tab.id as any)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  isActive
-                    ? 'bg-[#0B132B] text-white shadow-xs'
-                    : 'text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                {tab.label}
-              </button>
-            );
-          })}
-
-          <button className="p-2 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50">
-            <SlidersHorizontal className="w-4 h-4" />
-          </button>
+        <div className="text-xs font-bold text-slate-500">
+          Showing <span className="text-slate-900 font-extrabold">{filteredCompanies.length}</span> companies
         </div>
       </div>
 
-      {/* Company Cards Grid matching Screenshot 2 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {/* Company Cards Grid with Inline Rounds & SPR Allotments */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {filteredCompanies.map((comp) => {
-          const isActive = comp.status === 'ACTIVE';
-          const isPending = comp.status === 'PENDING';
-          const isCompleted = comp.status === 'COMPLETED';
-
           const compRounds = rounds.filter((r) => r.companyId === comp.id || r.companyName === comp.name);
-          const compOffers = offers.filter((o) => o.companyId === comp.id || o.companyName === comp.name);
-          const totalSat = comp.totalStudentsSat || compRounds.reduce((acc, r) => acc + (r.attendedCount || r.totalShortlisted || 0), 0) || 0;
-          const offersGiven = comp.offersGivenCount || compOffers.length || 0;
+          const uniqueVenues = Array.from(new Set(compRounds.map((r) => r.venue).filter(Boolean)));
+          const totalSprsAssigned = compRounds.reduce((acc, r) => acc + (r.assignedSprIds?.length || 0), 0);
 
           return (
             <div
               key={comp.id}
-              onClick={() => setSelectedCompany(comp)}
-              className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm hover:shadow-md hover:border-slate-200 transition-all flex flex-col justify-between space-y-6 cursor-pointer group relative"
+              className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs hover:border-amber-400 hover:shadow-xl transition-all duration-200 flex flex-col justify-between space-y-5 cursor-default group"
             >
-              <div>
-                {/* Logo Avatar, Status Badge, and Delete Button */}
+              <div className="space-y-4">
+                {/* Top Title & Delete */}
                 <div className="flex items-start justify-between">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-100 text-blue-700 font-extrabold flex items-center justify-center text-sm shadow-xs">
-                    {comp.logo}
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <span
-                      className={`text-[11px] font-bold px-3 py-1 rounded-full border ${
-                        isActive
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : isPending
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-blue-50 text-blue-700 border-blue-200'
-                      }`}
-                    >
-                      • {comp.status.charAt(0) + comp.status.slice(1).toLowerCase()}
-                    </span>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Are you sure you want to delete company ${comp.name}?`)) {
-                          deleteCompany(comp.id);
-                        }
-                      }}
-                      title="Delete Company"
-                      className="p-1.5 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Company Name & Industry */}
-                <div className="mt-4">
-                  <h3 className="text-xl font-extrabold text-slate-900 tracking-tight group-hover:text-amber-600 transition-colors">
-                    {comp.name}
-                  </h3>
-                  <p className="text-xs font-semibold text-slate-400 mt-0.5">
-                    {comp.industry}
-                  </p>
-                </div>
-
-                <div className="border-t border-slate-100 my-4" />
-
-                {/* Metrics: Active drives & Eligible students */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                      Active drives
-                    </span>
-                    <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                      {comp.activeDrivesCount}
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500 text-slate-950 font-black flex items-center justify-center text-lg shadow-sm group-hover:scale-105 transition-transform">
+                      {comp.name.substring(0, 2).toUpperCase()}
                     </div>
-                  </div>
-
-                  <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                      Eligible students
-                    </span>
-                    <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                      {comp.eligibleStudentsCount.toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Requirement #4: Completed Drive Summary Option at bottom of card */}
-                {isCompleted && (
-                  <div className="mt-4 p-4 bg-amber-50/70 border border-amber-200/80 rounded-2xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-extrabold uppercase text-amber-900 tracking-wider flex items-center space-x-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline mr-1" />
-                        Drive Completed
-                      </span>
-                      <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-md">
-                        Summary
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-xs font-bold text-slate-800">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-normal">Students Sat</span>
-                        {totalSat} students
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-normal">Offers Provided</span>
-                        <span className="text-emerald-700 font-extrabold">{offersGiven} offers</span>
+                    <div>
+                      <h3 className="text-2xl font-black text-slate-900 tracking-tight group-hover:text-amber-600 transition-colors">
+                        {comp.name}
+                      </h3>
+                      <div className="text-xs font-bold text-slate-400 flex items-center space-x-2 mt-0.5">
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>{compRounds[0]?.date || 'Drive Day'}</span>
+                        <span>•</span>
+                        <span>{compRounds.length} Rounds</span>
+                        <span>•</span>
+                        <span className="text-amber-600 font-extrabold">{totalSprsAssigned} SPRs Allotted</span>
                       </div>
                     </div>
+                  </div>
 
-                    <div className="text-[11px] text-slate-600 italic bg-white p-2.5 rounded-xl border border-amber-100 leading-relaxed">
-                      <MessageSquare className="w-3 h-3 text-amber-600 inline mr-1" />
-                      "{comp.recruiterFeedback || 'Strong candidate pool. High technical domain performance across selection rounds.'}"
-                    </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (window.confirm(`Delete company ${comp.name} and all its rounds?`)) {
+                        deleteCompany(comp.id);
+                      }
+                    }}
+                    title="Delete Company"
+                    className="p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
 
-                    {/* Delete if Completed option */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Delete completed drive for ${comp.name}?`)) {
-                          deleteCompany(comp.id);
-                        }
-                      }}
-                      className="w-full py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center space-x-1.5"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete If Completed</span>
-                    </button>
+                {/* Venues Pill Badges */}
+                {uniqueVenues.length > 0 && (
+                  <div className="flex items-center flex-wrap gap-1.5 pt-1">
+                    <span className="text-[10px] font-extrabold text-slate-400 uppercase mr-1">
+                      Venues:
+                    </span>
+                    {uniqueVenues.map((v, i) => (
+                      <span
+                        key={i}
+                        className="bg-slate-100 text-slate-700 text-xs font-bold px-2.5 py-1 rounded-lg flex items-center space-x-1"
+                      >
+                        <MapPin className="w-3 h-3 text-amber-500 shrink-0" />
+                        <span>{v}</span>
+                      </span>
+                    ))}
                   </div>
                 )}
+
+                {/* Inline Rounds List with Assigned SPRs & Quick Attendance */}
+                <div className="border-t border-slate-100 pt-3 space-y-2.5">
+                  <div className="text-[10px] font-extrabold uppercase text-slate-400 tracking-widest">
+                    Rounds & Allotted SPRs
+                  </div>
+
+                  {compRounds.length === 0 ? (
+                    <div className="text-xs text-slate-400 italic py-2">
+                      No rounds scheduled for this company yet.
+                    </div>
+                  ) : (
+                    compRounds.map((rnd) => {
+                      const assignedSprs = (rnd.assignedSprIds || []).map(
+                        (id) => sprs.find((s) => s.id === id) || { id, name: id }
+                      );
+
+                      return (
+                        <div
+                          key={rnd.id}
+                          className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70 space-y-2"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="font-extrabold text-slate-900 text-sm flex items-center space-x-2">
+                              <span className="w-5 h-5 rounded-md bg-amber-100 text-amber-900 text-xs font-black flex items-center justify-center">
+                                R{rnd.roundNumber}
+                              </span>
+                              <span>{rnd.name}</span>
+                            </div>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenRoundAttendance(rnd.id);
+                              }}
+                              className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                              <span>Mark Attendance</span>
+                            </button>
+                          </div>
+
+                          <div className="text-xs text-slate-500 flex items-center space-x-3 font-semibold">
+                            <span className="flex items-center space-x-1">
+                              <MapPin className="w-3 h-3 text-amber-600" />
+                              <span>{rnd.venue}</span>
+                            </span>
+                            <span>•</span>
+                            <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md font-bold text-[10px]">
+                              Full Day
+                            </span>
+                            <span>•</span>
+                            <span className="text-slate-700">
+                              Attended: <strong className="text-slate-900">{rnd.attendedCount || 0}</strong>
+                            </span>
+                          </div>
+
+                          {/* Allotted SPRs Pills */}
+                          <div className="flex items-center flex-wrap gap-1.5 pt-1">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase">
+                              Allotted SPRs:
+                            </span>
+                            {assignedSprs.length === 0 ? (
+                              <span className="text-xs text-slate-400">None</span>
+                            ) : (
+                              assignedSprs.map((spr, sIdx) => (
+                                <span
+                                  key={sIdx}
+                                  className="bg-white border border-slate-200 text-slate-800 text-[11px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs"
+                                >
+                                  {spr.name}
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
 
-              {/* Link matching Screenshot 2 */}
-              <div className="pt-2 border-t border-slate-100">
-                <div className="w-full inline-flex items-center justify-between text-xs font-bold text-slate-900 group-hover:text-amber-600 py-1 transition-colors">
-                  <span>Open company profile</span>
-                  <ArrowUpRight className="w-4 h-4" />
-                </div>
+              {/* Informational Card Footer */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                <span className="text-slate-400 font-bold flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>Process Active</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedCompany(comp);
+                  }}
+                  className="text-xs font-black text-amber-600 hover:text-amber-700 flex items-center space-x-1 cursor-pointer transition-colors"
+                >
+                  <span>Open Details</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Expanded Comprehensive Add Company Modal */}
+      {/* Add Company Modal with Per-Round Venue Configuration */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-5 border border-slate-100 my-8">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-6 border border-slate-100 my-8 max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
-                <h3 className="text-lg font-extrabold text-slate-900">Add New Recruiter & Selection Drives</h3>
-                <p className="text-xs text-slate-500">Configures company profile, roles, eligibility criteria, and selection rounds</p>
+                <div className="text-[10px] font-extrabold uppercase tracking-widest text-amber-600 mb-1">
+                  SPR ALLOTMENT & ATTENDANCE SETUP
+                </div>
+                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
+                  Add Company
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Configure company rounds and their venues directly. SPRs will be allotted automatically in a fair cycle.
+                </p>
               </div>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 font-bold transition-colors cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleCreateCompanySubmit} className="space-y-4 text-xs">
-              {/* Section 1: Basic Info */}
-              <div className="bg-slate-50 p-4 rounded-2xl space-y-3 border border-slate-200/80">
-                <div className="font-extrabold text-slate-900 uppercase text-[10px] tracking-widest">1. Company Identity</div>
-                <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleCreateCompanySubmit} className="space-y-6 text-xs">
+              {/* SECTION 1: Company Name & Date */}
+              <div className="bg-slate-50 p-5 rounded-2xl space-y-4 border border-slate-200/80">
+                <div className="flex items-center space-x-2">
+                  <span className="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 font-black flex items-center justify-center text-xs">
+                    1
+                  </span>
+                  <span className="font-extrabold text-slate-900 uppercase text-[11px] tracking-widest">
+                    Company Details
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1">Company Name</label>
+                    <label className="font-bold text-slate-700 block mb-1.5">
+                      Company Name *
+                    </label>
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Goldman Sachs"
+                      placeholder="e.g. Google, Microsoft, TCS"
                       value={newCompName}
                       onChange={(e) => setNewCompName(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500/50"
                     />
                   </div>
 
                   <div>
-                    <label className="font-bold text-slate-700 block mb-1">Industry Sector</label>
+                    <label className="font-bold text-slate-700 block mb-1.5">
+                      Drive Date *
+                    </label>
                     <input
-                      type="text"
-                      placeholder="e.g. Financial Technology / Investment Bank"
-                      value={newCompIndustry}
-                      onChange={(e) => setNewCompIndustry(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+                      type="date"
+                      required
+                      value={driveDate}
+                      onChange={(e) => setDriveDate(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500/50"
                     />
                   </div>
                 </div>
+              </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">Placement Tier</label>
-                    <select
-                      value={newCompCategory}
-                      onChange={(e) => setNewCompCategory(e.target.value as any)}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
+              {/* SECTION 2: Rounds with Venue Setup Inside Each Round */}
+              <div className="bg-slate-50 p-5 rounded-2xl space-y-4 border border-slate-200/80">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 font-black flex items-center justify-center text-xs">
+                      2
+                    </span>
+                    <span className="font-extrabold text-slate-900 uppercase text-[11px] tracking-widest">
+                      Rounds, Venues & SPR Allotment
+                    </span>
+                  </div>
+
+                  {/* Number of Rounds Counter */}
+                  <div className="flex items-center space-x-2">
+                    <span className="font-bold text-slate-600">Total Rounds:</span>
+                    <div className="flex items-center border border-slate-200 rounded-xl bg-white overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => handleTotalRoundsChange(totalRounds - 1)}
+                        className="px-2.5 py-1 text-slate-600 hover:bg-slate-100 font-black"
+                      >
+                        -
+                      </button>
+                      <span className="px-3 py-1 font-black text-slate-900 text-sm">
+                        {totalRounds}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleTotalRoundsChange(totalRounds + 1)}
+                        className="px-2.5 py-1 text-slate-600 hover:bg-slate-100 font-black"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-1">
+                  {roundsList.map((rc, roundIdx) => (
+                    <div
+                      key={roundIdx}
+                      className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4"
                     >
-                      <option value="DREAM">Dream Tier (15-25 LPA)</option>
-                      <option value="SUPER_DREAM">Super Dream Tier (&gt;25 LPA)</option>
-                      <option value="CORE">Core Tier (8-15 LPA)</option>
-                      <option value="MASS">Mass Tier (&lt;8 LPA)</option>
-                    </select>
-                  </div>
+                      {/* Round Header */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                        <span className="font-black text-slate-900 text-sm flex items-center space-x-2">
+                          <span className="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 text-xs font-black flex items-center justify-center">
+                            {roundIdx + 1}
+                          </span>
+                          <span>Round #{roundIdx + 1}</span>
+                        </span>
 
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">Package CTC (in LPA)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={newCompCtc}
-                      onChange={(e) => setNewCompCtc(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                    />
-                  </div>
-                </div>
+                        <span className="font-extrabold text-amber-900 bg-amber-100/80 px-3 py-1 rounded-xl text-xs border border-amber-200">
+                          {rc.sprsNeeded || 2} SPRs Needed
+                        </span>
+                      </div>
 
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Roles Offered (comma-separated)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Software Engineer, Quantitative Analyst"
-                    value={newCompRoles}
-                    onChange={(e) => setNewCompRoles(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                  />
+                      {/* Round Name, Round Date & SPRs Needed */}
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div className="sm:col-span-2">
+                          <label className="font-bold text-slate-700 block mb-1 text-xs">
+                            Round Name *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={rc.name}
+                            onChange={(e) => updateRoundField(roundIdx, 'name', e.target.value)}
+                            placeholder="e.g. Technical Interview"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-xs focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="font-bold text-slate-700 block mb-1 text-xs text-amber-900">
+                            Round Date *
+                          </label>
+                          <input
+                            type="date"
+                            required
+                            value={rc.date || driveDate}
+                            onChange={(e) => updateRoundField(roundIdx, 'date', e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold outline-none text-xs focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="font-bold text-slate-700 block mb-1 text-xs text-amber-800">
+                            SPRs Needed *
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="15"
+                            required
+                            value={rc.sprsNeeded}
+                            onChange={(e) =>
+                              updateRoundField(roundIdx, 'sprsNeeded', Math.max(1, Number(e.target.value)))
+                            }
+                            className="w-full bg-amber-50/60 border border-amber-300 rounded-xl p-2.5 font-black text-amber-900 outline-none text-xs focus:ring-2 focus:ring-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* VENUE SETUP FOR THIS ROUND */}
+                      <div className="bg-slate-50/80 p-3.5 rounded-xl border border-slate-200/80 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="font-extrabold text-slate-800 text-[11px] uppercase tracking-wider">
+                              Venues for this Round ({rc.venues.length})
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => addVenueToRound(roundIdx)}
+                            className="text-[11px] font-black text-amber-600 hover:text-amber-700 bg-white px-2.5 py-1 rounded-lg border border-amber-200 hover:border-amber-300 shadow-2xs transition-all cursor-pointer"
+                          >
+                            + Add Venue
+                          </button>
+                        </div>
+
+                        <div className="space-y-2">
+                          {rc.venues.map((venueVal, vIdx) => (
+                            <div key={vIdx} className="flex items-center space-x-2">
+                              <span className="w-6 h-6 rounded-md bg-slate-200 text-slate-700 font-bold flex items-center justify-center text-[10px] shrink-0">
+                                V{vIdx + 1}
+                              </span>
+                              <input
+                                type="text"
+                                required
+                                value={venueVal}
+                                onChange={(e) => handleVenueChange(roundIdx, vIdx, e.target.value)}
+                                placeholder="e.g. Block A - Audi 1 or Lab 204"
+                                className="w-full bg-white border border-slate-200 rounded-xl p-2 font-bold outline-none text-xs focus:ring-2 focus:ring-amber-500"
+                              />
+                              {rc.venues.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeVenueFromRound(roundIdx, vIdx)}
+                                  className="text-slate-400 hover:text-red-600 p-1.5 text-xs font-bold"
+                                  title="Remove this venue"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              {/* Section 2: Eligibility Rules */}
-              <div className="bg-slate-50 p-4 rounded-2xl space-y-3 border border-slate-200/80">
-                <div className="font-extrabold text-slate-900 uppercase text-[10px] tracking-widest">2. Eligibility Filtering Criteria</div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">Minimum CGPA Cutoff</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={minCgpa}
-                      onChange={(e) => setMinCgpa(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                    />
+              {/* Automatic Cycle Allotment Summary */}
+              <div className="bg-amber-50/80 border border-amber-200 p-4 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Sparkles className="w-4 h-4 text-amber-600" />
+                    <span className="font-extrabold text-amber-950">
+                      Automated Cycle Allotment Engine
+                    </span>
                   </div>
-
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">Maximum Allowed Active Backlogs</label>
-                    <input
-                      type="number"
-                      value={maxBacklogs}
-                      onChange={(e) => setMaxBacklogs(Number(e.target.value))}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 font-bold outline-none"
-                    />
-                  </div>
+                  <span className="text-xs font-black text-amber-900 bg-amber-200/70 px-3 py-1 rounded-full">
+                    {totalAllottedSprsNeeded} SPR Duties to Allot
+                  </span>
                 </div>
+                <p className="text-[11px] text-amber-900/80 leading-relaxed font-medium">
+                  Submitting will automatically create all <strong>{roundsList.length} rounds</strong> with their specified venues, generate attendance QR codes, and rotate through the <strong>{sprs.length} registered SPRs</strong> so duty distribution remains balanced and equitable.
+                </p>
               </div>
 
-              <div className="pt-3 flex items-center justify-end space-x-3">
+              {/* Modal Actions */}
+              <div className="pt-2 flex items-center justify-end space-x-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 rounded-xl text-slate-600 font-bold hover:bg-slate-100"
+                  className="px-5 py-2.5 rounded-xl text-slate-600 font-bold hover:bg-slate-100 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#0B132B] text-white font-extrabold hover:bg-slate-800 shadow-md cursor-pointer"
+                  className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black shadow-md cursor-pointer transition-all active:scale-95 flex items-center space-x-2"
                 >
-                  Save Company Profile
+                  <Sparkles className="w-4 h-4" />
+                  <span>Create Drive & Auto-Allot SPRs</span>
                 </button>
               </div>
             </form>
