@@ -108,6 +108,10 @@ interface PortalContextType {
   markAttendance: (roundId: string, sapId: string, method?: string, candidateName?: string) => { success: boolean; message: string };
   manualAttendanceOverride: (roundId: string, sapId: string, status: 'PRESENT' | 'ABSENT', reason: string) => void;
   triggerSprAllocation: (roundId: string, countNeeded: number) => { success: boolean; count: number };
+  allocateSprsToRound: (roundId: string, countNeeded: number, targetVenue?: string) => { success: boolean; count: number; message?: string };
+  assignSprManuallyToRound: (roundId: string, sprId: string, targetVenue?: string) => { success: boolean; message?: string };
+  removeSprFromRound: (roundId: string, sprId: string) => { success: boolean; message?: string };
+  reassignSprVenue: (roundId: string, sprId: string, newVenue: string) => { success: boolean; message?: string };
   addSpr: (sprData: { name: string; sapId: string; branch: string; email?: string; phone?: string }) => void;
   updateSpr: (id: string, data: Partial<SPR>) => void;
   deleteSpr: (id: string) => void;
@@ -878,7 +882,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const rDate = rc.date || payload.driveDate || new Date().toISOString().split('T')[0];
         const rStartTime = '09:00';
         const rEndTime = '18:00';
-        const rVenue = (rc.venues && rc.venues.filter(Boolean).join(', ')) || rc.venue || (payload.venues && payload.venues[idx % payload.venues.length]) || 'Campus Venue';
+        const rVenuesList = (rc.venues && rc.venues.filter(Boolean).length > 0)
+          ? rc.venues.filter(Boolean)
+          : (rc.venue ? rc.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+        const rVenue = rVenuesList.join(', ');
         const sprsReq = Math.max(1, Number(rc.sprsNeeded) || 2);
 
         const qrResult = generateRoundQRToken(roundId, driveId, payload.name, rName, 60);
@@ -896,6 +903,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           startTime: rStartTime,
           endTime: rEndTime,
           venue: rVenue,
+          venues: rVenuesList,
           capacity: 60,
           qrToken: qrResult.token,
           qrExpiresAt: qrResult.expiresAtIso,
@@ -916,31 +924,46 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         );
         const allocatedSprIds = allocResult.selectedSprs.map((s) => s.id);
 
-        const createdRound: Round = {
-          ...mockRoundForAlloc,
-          assignedSprIds: allocatedSprIds,
-        };
+        // Divide allocated SPRs equally among the round's venues
+        const venueAssignmentsMap: Record<string, string[]> = {};
+        rVenuesList.forEach((v) => {
+          venueAssignmentsMap[v] = [];
+        });
 
-        newRoundsCreated.push(createdRound);
-        currentRoundsList = [createdRound, ...currentRoundsList];
+        allocResult.selectedSprs.forEach((spr, sIdx) => {
+          const assignedVenue = rVenuesList[sIdx % rVenuesList.length];
+          venueAssignmentsMap[assignedVenue].push(spr.id);
 
-        // Create duty assignments for this round (assumed full day)
-        allocResult.selectedSprs.forEach((spr) => {
           newDuties.push({
-            id: `duty-${Date.now()}-${spr.id}-${roundNum}`,
+            id: `duty-${Date.now()}-${spr.id}-${roundNum}-${sIdx}`,
             roundId,
             sprId: spr.id,
             sprName: spr.name,
             companyName: payload.name,
-            roundName: createdRound.name,
-            date: createdRound.date,
+            roundName: rName,
+            date: rDate,
             timeWindow: 'Full Day',
-            venue: createdRound.venue,
+            venue: assignedVenue, // INDIVIDUAL SPECIFIC ASSIGNED VENUE
             role: 'SPR Duty',
             status: 'ASSIGNED',
             assignedAt: new Date().toISOString(),
           });
         });
+
+        const venueAssignments = rVenuesList.map((v) => ({
+          venue: v,
+          sprIds: venueAssignmentsMap[v] || [],
+        }));
+
+        const createdRound: Round = {
+          ...mockRoundForAlloc,
+          venues: rVenuesList,
+          venueAssignments,
+          assignedSprIds: allocatedSprIds,
+        };
+
+        newRoundsCreated.push(createdRound);
+        currentRoundsList = [createdRound, ...currentRoundsList];
 
         // Update SPR pool duty counts and cycle usage
         currentSprPool = currentSprPool.map((s) => {
@@ -1115,6 +1138,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const sprsNeededCount = roundData.sprsNeeded || 3;
 
+    // Parse venues
+    const rVenuesList = (roundData.venues && roundData.venues.filter(Boolean).length > 0)
+      ? roundData.venues.filter(Boolean)
+      : (roundData.venue ? roundData.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Block A - Lab 1']);
+    const rVenue = rVenuesList.join(', ');
+
     // Build base round model
     const mockRoundForAlloc: Round = {
       id: roundId,
@@ -1128,7 +1157,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       date: roundData.date || new Date().toISOString().split('T')[0],
       startTime: roundData.startTime || '10:00',
       endTime: roundData.endTime || '13:00',
-      venue: roundData.venue || 'Block A - Lab 1',
+      venue: rVenue,
+      venues: rVenuesList,
       capacity: roundData.capacity || 50,
       qrToken: qrResult.token,
       qrExpiresAt: qrResult.expiresAtIso,
@@ -1144,8 +1174,42 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const allocResult = allocateSPRsForRound(mockRoundForAlloc, sprsNeededCount, sprs, sprCycle, rounds);
     const allocatedSprIds = allocResult.selectedSprs.map((s) => s.id);
 
+    // Divide allocated SPRs equally among the round's venues
+    const venueAssignmentsMap: Record<string, string[]> = {};
+    rVenuesList.forEach((v) => {
+      venueAssignmentsMap[v] = [];
+    });
+
+    const newDuties: SPRDutyAssignment[] = [];
+    allocResult.selectedSprs.forEach((spr, sIdx) => {
+      const assignedVenue = rVenuesList[sIdx % rVenuesList.length];
+      venueAssignmentsMap[assignedVenue].push(spr.id);
+
+      newDuties.push({
+        id: `duty-${Date.now()}-${spr.id}-${sIdx}`,
+        roundId,
+        sprId: spr.id,
+        sprName: spr.name,
+        companyName,
+        roundName,
+        date: mockRoundForAlloc.date,
+        timeWindow: `${mockRoundForAlloc.startTime} - ${mockRoundForAlloc.endTime}`,
+        venue: assignedVenue, // INDIVIDUAL SPECIFIC ASSIGNED VENUE
+        role: 'SPR Duty',
+        status: 'ASSIGNED',
+        assignedAt: new Date().toISOString(),
+      });
+    });
+
+    const venueAssignments = rVenuesList.map((v) => ({
+      venue: v,
+      sprIds: venueAssignmentsMap[v] || [],
+    }));
+
     const newRound: Round = {
       ...mockRoundForAlloc,
+      venues: rVenuesList,
+      venueAssignments,
       assignedSprIds: allocatedSprIds,
     };
 
@@ -1165,21 +1229,6 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           };
         })
       );
-
-      const newDuties: SPRDutyAssignment[] = allocResult.selectedSprs.map((spr) => ({
-        id: `duty-${Date.now()}-${spr.id}`,
-        roundId,
-        sprId: spr.id,
-        sprName: spr.name,
-        companyName,
-        roundName,
-        date: newRound.date,
-        timeWindow: `${newRound.startTime} - ${newRound.endTime}`,
-        venue: newRound.venue,
-        role: 'SPR Duty',
-        status: 'ASSIGNED',
-        assignedAt: new Date().toISOString(),
-      }));
 
       setDutyAssignments((prev) => [...newDuties, ...prev]);
 
@@ -1456,75 +1505,327 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${cleanSap}. Reason: ${reason}`);
   };
 
-  const triggerSprAllocation = (roundId: string, countNeeded: number) => {
+  const allocateSprsToRound = (roundId: string, countNeeded: number, targetVenue?: string) => {
     const round = rounds.find((r) => r.id === roundId);
-    if (!round) return { success: false, count: 0 };
+    if (!round) return { success: false, count: 0, message: 'Round not found' };
+
+    let roundVenues = (round.venues && round.venues.length > 0)
+      ? round.venues.filter(Boolean)
+      : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+    if (roundVenues.length === 0) roundVenues = ['Campus Venue'];
 
     const allocation = allocateSPRsForRound(round, countNeeded, sprs, sprCycle, rounds);
-
     if (allocation.selectedSprs.length === 0) {
-      return { success: false, count: 0 };
+      return { success: false, count: 0, message: 'No eligible SPRs available for this date / cycle' };
     }
 
     const selectedIds = allocation.selectedSprs.map((s) => s.id);
 
+    // Current venueAssignments or initialize
+    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
+      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: [...va.sprIds] }))
+      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
+
+    roundVenues.forEach((rv) => {
+      if (!currentVA.some((va) => va.venue === rv)) {
+        currentVA.push({ venue: rv, sprIds: [] });
+      }
+    });
+
+    const newDuties: SPRDutyAssignment[] = [];
+
+    // Distribute newly selected SPRs
+    allocation.selectedSprs.forEach((spr) => {
+      let assignedVenue = targetVenue;
+      if (!assignedVenue || !roundVenues.includes(assignedVenue)) {
+        // Find venue in currentVA with the lowest sprIds.length to balance equally!
+        const sortedVA = [...currentVA].sort((a, b) => a.sprIds.length - b.sprIds.length);
+        assignedVenue = sortedVA[0].venue;
+      }
+
+      const targetGroup = currentVA.find((va) => va.venue === assignedVenue);
+      if (targetGroup) {
+        targetGroup.sprIds.push(spr.id);
+      } else {
+        currentVA.push({ venue: assignedVenue, sprIds: [spr.id] });
+      }
+
+      newDuties.push({
+        id: `duty-${Date.now()}-${spr.id}-${Math.random().toString(36).substring(2, 6)}`,
+        roundId,
+        sprId: spr.id,
+        sprName: spr.name,
+        companyName: round.companyName,
+        roundName: round.name,
+        date: round.date,
+        timeWindow: round.startTime && round.endTime ? `${round.startTime} - ${round.endTime}` : 'Full Day',
+        venue: assignedVenue,
+        role: 'SPR Duty',
+        status: 'ASSIGNED',
+        assignedAt: new Date().toISOString(),
+      });
+    });
+
     // Update round assigned SPRs
-    setRounds((prev) =>
-      prev.map((r) => (r.id === roundId ? { ...r, assignedSprIds: [...r.assignedSprIds, ...selectedIds] } : r))
+    const nextRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            venues: roundVenues,
+            venueAssignments: currentVA,
+            assignedSprIds: Array.from(new Set([...r.assignedSprIds, ...selectedIds])),
+          }
+        : r
     );
+    setRounds(nextRounds);
 
     // Update SPR used flags and duty counts
-    setSprs((prev) =>
-      prev.map((s) => {
-        const wasSelected = selectedIds.includes(s.id);
-        const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
-        // If cycle completes, reset usedInCurrentCycle to false so duty repeats fairly in next cycle!
-        const updatedUsedInCycle = allocation.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
-        return {
-          ...s,
-          totalDuties: updatedTotalDuties,
-          usedInCurrentCycle: updatedUsedInCycle,
-        };
-      })
+    const nextSprs = sprs.map((s) => {
+      const wasSelected = selectedIds.includes(s.id);
+      const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
+      const updatedUsedInCycle = allocation.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
+      return {
+        ...s,
+        totalDuties: updatedTotalDuties,
+        usedInCurrentCycle: updatedUsedInCycle,
+      };
+    });
+    setSprs(nextSprs);
+
+    const nextDuties = [...newDuties, ...dutyAssignments];
+    setDutyAssignments(nextDuties);
+
+    // Update cycle count
+    const newUsed = sprCycle.usedSprCount + selectedIds.length;
+    const isClosed = allocation.cycleClosed;
+    const nextCycle: SPRCycle = {
+      ...sprCycle,
+      totalSprsInPool: nextSprs.length,
+      usedSprCount: isClosed ? 0 : newUsed,
+      id: isClosed ? sprCycle.id + 1 : sprCycle.id,
+      status: isClosed ? 'OPEN' : sprCycle.status,
+    };
+    setSprCycle(nextCycle);
+
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+    } catch {}
+
+    addAuditLog(
+      'SPR_ALLOCATED',
+      `Auto-allocated ${allocation.selectedSprs.length} SPRs (${allocation.selectedSprs.map((s) => s.name).join(', ')}) to ${round.companyName} (${round.name}) divided equally across venues.`
     );
 
-    // Create duty assignments
-    const newDuties: SPRDutyAssignment[] = allocation.selectedSprs.map((spr) => ({
-      id: `duty-${Date.now()}-${spr.id}`,
+    return {
+      success: true,
+      count: allocation.selectedSprs.length,
+      message: `Successfully allocated ${allocation.selectedSprs.length} SPR(s) following fair rotation cycle.`,
+    };
+  };
+
+  const triggerSprAllocation = (roundId: string, countNeeded: number) => {
+    return allocateSprsToRound(roundId, countNeeded);
+  };
+
+  const assignSprManuallyToRound = (roundId: string, sprId: string, targetVenue?: string) => {
+    const round = rounds.find((r) => r.id === roundId);
+    if (!round) return { success: false, message: 'Round not found' };
+
+    const spr = sprs.find((s) => s.id === sprId);
+    if (!spr) return { success: false, message: 'SPR not found' };
+
+    if (round.assignedSprIds?.includes(sprId)) {
+      return { success: false, message: `${spr.name} is already assigned to this round.` };
+    }
+
+    let roundVenues = (round.venues && round.venues.length > 0)
+      ? round.venues.filter(Boolean)
+      : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+    if (roundVenues.length === 0) roundVenues = ['Campus Venue'];
+
+    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
+      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: [...va.sprIds] }))
+      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
+
+    roundVenues.forEach((rv) => {
+      if (!currentVA.some((va) => va.venue === rv)) {
+        currentVA.push({ venue: rv, sprIds: [] });
+      }
+    });
+
+    let assignedVenue = targetVenue;
+    if (!assignedVenue || !roundVenues.includes(assignedVenue)) {
+      const sortedVA = [...currentVA].sort((a, b) => a.sprIds.length - b.sprIds.length);
+      assignedVenue = sortedVA[0].venue;
+    }
+
+    const targetGroup = currentVA.find((va) => va.venue === assignedVenue);
+    if (targetGroup) {
+      targetGroup.sprIds.push(spr.id);
+    } else {
+      currentVA.push({ venue: assignedVenue, sprIds: [spr.id] });
+    }
+
+    const newDuty: SPRDutyAssignment = {
+      id: `duty-${Date.now()}-${spr.id}-${Math.random().toString(36).substring(2, 6)}`,
       roundId,
       sprId: spr.id,
       sprName: spr.name,
       companyName: round.companyName,
       roundName: round.name,
       date: round.date,
-      timeWindow: `${round.startTime} - ${round.endTime}`,
-      venue: round.venue,
-      role: 'SPR Duty',
+      timeWindow: round.startTime && round.endTime ? `${round.startTime} - ${round.endTime}` : 'Full Day',
+      venue: assignedVenue,
+      role: 'SPR Duty (Manual)',
       status: 'ASSIGNED',
       assignedAt: new Date().toISOString(),
-    }));
+    };
 
-    setDutyAssignments((prev) => [...newDuties, ...prev]);
+    const nextRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            venues: roundVenues,
+            venueAssignments: currentVA,
+            assignedSprIds: [...r.assignedSprIds, sprId],
+          }
+        : r
+    );
+    setRounds(nextRounds);
 
-    // Update cycle count
-    setSprCycle((prev) => {
-      const newUsed = prev.usedSprCount + selectedIds.length;
-      const isClosed = allocation.cycleClosed;
-      return {
-        ...prev,
-        totalSprsInPool: sprs.length,
-        usedSprCount: isClosed ? 0 : newUsed,
-        id: isClosed ? prev.id + 1 : prev.id,
-        status: isClosed ? 'OPEN' : prev.status,
-      };
-    });
+    const nextSprs = sprs.map((s) =>
+      s.id === sprId
+        ? {
+            ...s,
+            totalDuties: s.totalDuties + 1,
+            usedInCurrentCycle: true,
+          }
+        : s
+    );
+    setSprs(nextSprs);
+
+    const nextDuties = [newDuty, ...dutyAssignments];
+    setDutyAssignments(nextDuties);
+
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+    } catch {}
 
     addAuditLog(
-      'SPR_ALLOCATED',
-      `Allocated ${allocation.selectedSprs.length} SPRs (${allocation.selectedSprs.map((s) => s.name).join(', ')}) to ${round.companyName} ${round.name}.`
+      'MANUAL_SPR_ASSIGNED',
+      `Manually assigned SPR ${spr.name} to ${round.companyName} (${round.name}) at venue ${assignedVenue}.`
     );
 
-    return { success: true, count: allocation.selectedSprs.length };
+    return { success: true, message: `Assigned ${spr.name} to ${assignedVenue}` };
+  };
+
+  const removeSprFromRound = (roundId: string, sprId: string) => {
+    const round = rounds.find((r) => r.id === roundId);
+    if (!round) return { success: false, message: 'Round not found' };
+
+    const spr = sprs.find((s) => s.id === sprId);
+    const sprName = spr ? spr.name : sprId;
+
+    const nextVA = (round.venueAssignments || []).map((va) => ({
+      venue: va.venue,
+      sprIds: va.sprIds.filter((id) => id !== sprId),
+    }));
+
+    const nextRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            venueAssignments: nextVA,
+            assignedSprIds: r.assignedSprIds.filter((id) => id !== sprId),
+          }
+        : r
+    );
+    setRounds(nextRounds);
+
+    const nextDuties = dutyAssignments.filter(
+      (d) => !(d.roundId === roundId && d.sprId === sprId)
+    );
+    setDutyAssignments(nextDuties);
+
+    const nextSprs = sprs.map((s) =>
+      s.id === sprId
+        ? {
+            ...s,
+            totalDuties: Math.max(0, s.totalDuties - 1),
+          }
+        : s
+    );
+    setSprs(nextSprs);
+
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+    } catch {}
+
+    addAuditLog(
+      'SPR_REMOVED',
+      `Removed SPR ${sprName} from ${round.companyName} - ${round.name}.`
+    );
+
+    return { success: true, message: `Removed ${sprName} from duty roster.` };
+  };
+
+  const reassignSprVenue = (roundId: string, sprId: string, newVenue: string) => {
+    const round = rounds.find((r) => r.id === roundId);
+    if (!round) return { success: false, message: 'Round not found' };
+
+    const spr = sprs.find((s) => s.id === sprId);
+    const sprName = spr ? spr.name : sprId;
+
+    let roundVenues = (round.venues && round.venues.length > 0)
+      ? round.venues.filter(Boolean)
+      : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+
+    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
+      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: va.sprIds.filter((id) => id !== sprId) }))
+      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
+
+    let targetGroup = currentVA.find((va) => va.venue === newVenue);
+    if (!targetGroup) {
+      targetGroup = { venue: newVenue, sprIds: [] };
+      currentVA.push(targetGroup);
+    }
+    targetGroup.sprIds.push(sprId);
+
+    const nextRounds = rounds.map((r) =>
+      r.id === roundId
+        ? {
+            ...r,
+            venueAssignments: currentVA,
+          }
+        : r
+    );
+    setRounds(nextRounds);
+
+    const nextDuties = dutyAssignments.map((d) =>
+      d.roundId === roundId && d.sprId === sprId
+        ? { ...d, venue: newVenue }
+        : d
+    );
+    setDutyAssignments(nextDuties);
+
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+    } catch {}
+
+    addAuditLog(
+      'SPR_VENUE_REASSIGNED',
+      `Reassigned SPR ${sprName} to venue ${newVenue} for ${round.companyName} - ${round.name}.`
+    );
+
+    return { success: true, message: `Reassigned ${sprName} to ${newVenue}` };
   };
 
   const resetAllDutiesToZero = () => {
@@ -1876,6 +2177,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         markAttendance,
         manualAttendanceOverride,
         triggerSprAllocation,
+        allocateSprsToRound,
+        assignSprManuallyToRound,
+        removeSprFromRound,
+        reassignSprVenue,
         addSpr,
         updateSpr,
         deleteSpr,

@@ -18,6 +18,9 @@ import {
 } from 'lucide-react';
 import { Company, Round } from '../../types';
 import * as XLSX from 'xlsx';
+import { DutyListModal } from '../modals/DutyListModal';
+import { ManageRoundSprsModal } from '../modals/ManageRoundSprsModal';
+import { getRoundVenueBreakdown } from '../../utils/dutyListExporter';
 
 interface RoundFormItem {
   name: string;
@@ -27,11 +30,13 @@ interface RoundFormItem {
 }
 
 export const CompaniesView: React.FC = () => {
-  const { companies, addCompany, deleteCompany, rounds, sprs, setActiveTab } = usePortal();
+  const { companies, addCompany, deleteCompany, rounds, sprs, dutyAssignments, setActiveTab } = usePortal();
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [createdCompanyNotice, setCreatedCompanyNotice] = useState<string | null>(null);
+  const [selectedCompanyForDutyList, setSelectedCompanyForDutyList] = useState<Company | null>(null);
+  const [selectedRoundForSprs, setSelectedRoundForSprs] = useState<Round | null>(null);
 
   // Form State: Company details
   const [newCompName, setNewCompName] = useState('');
@@ -329,18 +334,32 @@ export const CompaniesView: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (window.confirm(`Delete company ${comp.name} and all its rounds?`)) {
-                        deleteCompany(comp.id);
-                      }
-                    }}
-                    title="Delete Company"
-                    className="p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedCompanyForDutyList(comp);
+                      }}
+                      className="inline-flex items-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-black px-3 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer"
+                      title="Download & View Official Duty List"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Duty List</span>
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Delete company ${comp.name} and all its rounds?`)) {
+                          deleteCompany(comp.id);
+                        }
+                      }}
+                      title="Delete Company"
+                      className="p-2 rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Venues Pill Badges */}
@@ -373,16 +392,15 @@ export const CompaniesView: React.FC = () => {
                     </div>
                   ) : (
                     compRounds.map((rnd) => {
-                      const assignedSprs = (rnd.assignedSprIds || []).map(
-                        (id) => sprs.find((s) => s.id === id) || { id, name: id }
-                      );
+                      const breakdown = getRoundVenueBreakdown(rnd, dutyAssignments, sprs);
+                      const roundSprCount = rnd.assignedSprIds?.length || 0;
 
                       return (
                         <div
                           key={rnd.id}
-                          className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70 space-y-2"
+                          className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70 space-y-2.5"
                         >
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                             <div className="font-extrabold text-slate-900 text-sm flex items-center space-x-2">
                               <span className="w-5 h-5 rounded-md bg-amber-100 text-amber-900 text-xs font-black flex items-center justify-center">
                                 R{rnd.roundNumber}
@@ -390,19 +408,33 @@ export const CompaniesView: React.FC = () => {
                               <span>{rnd.name}</span>
                             </div>
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenRoundAttendance(rnd.id);
-                              }}
-                              className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
-                            >
-                              <UserCheck className="w-3.5 h-3.5" />
-                              <span>Mark Attendance</span>
-                            </button>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedRoundForSprs(rnd);
+                                }}
+                                className="inline-flex items-center space-x-1.5 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 font-extrabold text-xs px-2.5 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer"
+                                title="Add SPRs (Auto / Manual) or reassign venues"
+                              >
+                                <Users className="w-3.5 h-3.5 text-amber-500" />
+                                <span>+ Add SPR</span>
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenRoundAttendance(rnd.id);
+                                }}
+                                className="inline-flex items-center space-x-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                                <span>Mark Attendance</span>
+                              </button>
+                            </div>
                           </div>
 
-                          <div className="text-xs text-slate-500 flex items-center space-x-3 font-semibold">
+                          <div className="text-xs text-slate-500 flex items-center space-x-3 font-semibold flex-wrap gap-y-1">
                             <span className="flex items-center space-x-1">
                               <MapPin className="w-3 h-3 text-amber-600" />
                               <span>{rnd.venue}</span>
@@ -415,25 +447,45 @@ export const CompaniesView: React.FC = () => {
                             <span className="text-slate-700">
                               Attended: <strong className="text-slate-900">{rnd.attendedCount || 0}</strong>
                             </span>
+                            <span>•</span>
+                            <span className="text-amber-600 font-bold">
+                              {roundSprCount} SPRs Total
+                            </span>
                           </div>
 
-                          {/* Allotted SPRs Pills */}
-                          <div className="flex items-center flex-wrap gap-1.5 pt-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">
-                              Allotted SPRs:
-                            </span>
-                            {assignedSprs.length === 0 ? (
-                              <span className="text-xs text-slate-400">None</span>
-                            ) : (
-                              assignedSprs.map((spr, sIdx) => (
-                                <span
-                                  key={sIdx}
-                                  className="bg-white border border-slate-200 text-slate-800 text-[11px] font-extrabold px-2 py-0.5 rounded-md shadow-2xs"
-                                >
-                                  {spr.name}
-                                </span>
-                              ))
-                            )}
+                          {/* Venues with equally divided SPRs */}
+                          <div className="pt-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {breakdown.map((bg, bgIdx) => (
+                              <div
+                                key={bgIdx}
+                                className="bg-white rounded-xl p-2.5 border border-slate-200/90 shadow-2xs space-y-1.5"
+                              >
+                                <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                                  <span className="text-[11px] font-extrabold text-slate-800 flex items-center space-x-1">
+                                    <MapPin className="w-3 h-3 text-amber-500 shrink-0" />
+                                    <span className="truncate">{bg.venue}</span>
+                                  </span>
+                                  <span className="text-[10px] font-black text-amber-900 bg-amber-50 border border-amber-200/80 px-1.5 py-0.2 rounded">
+                                    {bg.sprs.length} SPR{bg.sprs.length === 1 ? '' : 's'}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center flex-wrap gap-1.5 pt-0.5">
+                                  {bg.sprs.length === 0 ? (
+                                    <span className="text-[10px] text-slate-400 italic">None allotted</span>
+                                  ) : (
+                                    bg.sprs.map((spr, sIdx) => (
+                                      <span
+                                        key={sIdx}
+                                        className="bg-slate-50 border border-slate-200 text-slate-900 text-[11px] font-extrabold px-2 py-0.5 rounded-md shadow-3xs flex items-center space-x-1"
+                                      >
+                                        <span>{spr.name}</span>
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       );
@@ -726,6 +778,22 @@ export const CompaniesView: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Duty List Modal */}
+      {selectedCompanyForDutyList && (
+        <DutyListModal
+          company={selectedCompanyForDutyList}
+          onClose={() => setSelectedCompanyForDutyList(null)}
+        />
+      )}
+
+      {/* Manage Round SPRs Modal */}
+      {selectedRoundForSprs && (
+        <ManageRoundSprsModal
+          round={selectedRoundForSprs}
+          onClose={() => setSelectedRoundForSprs(null)}
+        />
       )}
     </div>
   );

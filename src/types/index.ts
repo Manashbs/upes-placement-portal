@@ -100,6 +100,8 @@ export interface Round {
   startTime: string; // HH:MM
   endTime: string; // HH:MM
   venue: string; // e.g. "Block A - Lab 3"
+  venues?: string[];
+  venueAssignments?: { venue: string; sprIds: string[] }[];
   capacity: number;
   qrToken: string;
   qrExpiresAt: string;

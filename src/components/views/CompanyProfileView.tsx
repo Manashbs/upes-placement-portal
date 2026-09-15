@@ -18,10 +18,13 @@ import {
   Award,
   Users,
   UserCheck,
+  Download,
 } from 'lucide-react';
 import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { RoundDetailsModal } from '../modals/RoundDetailsModal';
 import { RoundQRControlModal } from '../modals/RoundQRControlModal';
+import { DutyListModal } from '../modals/DutyListModal';
+import { ManageRoundSprsModal } from '../modals/ManageRoundSprsModal';
 import { ErrorBoundary } from '../common/ErrorBoundary';
 
 interface CompanyProfileViewProps {
@@ -37,6 +40,8 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showExcelUpload, setShowExcelUpload] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [showDutyListModal, setShowDutyListModal] = useState(false);
+  const [selectedRoundForSprs, setSelectedRoundForSprs] = useState<Round | null>(null);
   const [selectedRoundForDetails, setSelectedRoundForDetails] = useState<Round | null>(null);
   const [selectedRoundForUpload, setSelectedRoundForUpload] = useState<Round | null>(null);
   const [selectedRoundForQR, setSelectedRoundForQR] = useState<Round | null>(null);
@@ -219,12 +224,20 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
         </div>
 
         <div className="flex items-center space-x-3">
+          <button
+            onClick={() => setShowDutyListModal(true)}
+            className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-4 py-3 rounded-2xl shadow-sm transition-all active:scale-95 cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>Duty List</span>
+          </button>
+
           {!isCompleted && (
             <button
               onClick={() => setShowCompletionModal(true)}
-              className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold px-4 py-3 rounded-2xl shadow-sm transition-all active:scale-95 cursor-pointer"
+              className="inline-flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold px-4 py-3 rounded-2xl shadow-sm transition-all active:scale-95 cursor-pointer"
             >
-              <CheckCircle2 className="w-4 h-4" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
               <span>Mark Process Completed</span>
             </button>
           )}
@@ -417,19 +430,33 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
                       </span>
                     </div>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        try {
-                          sessionStorage.setItem('upes_active_round_id', rnd.id);
-                        } catch {}
-                        setActiveTab('attendance');
-                      }}
-                      className="inline-flex items-center space-x-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
-                    >
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>Mark Attendance</span>
-                    </button>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedRoundForSprs(rnd);
+                        }}
+                        className="inline-flex items-center space-x-1 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 text-xs font-bold px-2.5 py-1.5 rounded-xl shadow-2xs transition-all active:scale-95 cursor-pointer"
+                        title="Add SPRs automatically or manually, and manage venues"
+                      >
+                        <Users className="w-3.5 h-3.5 text-amber-500" />
+                        <span>+ Add SPR</span>
+                      </button>
+
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          try {
+                            sessionStorage.setItem('upes_active_round_id', rnd.id);
+                          } catch {}
+                          setActiveTab('attendance');
+                        }}
+                        className="inline-flex items-center space-x-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black px-3 py-1.5 rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>Mark Attendance</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -917,6 +944,22 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
           setShowExcelUpload(true);
         }}
       />
+
+      {/* Duty List Modal */}
+      {showDutyListModal && (
+        <DutyListModal
+          company={company}
+          onClose={() => setShowDutyListModal(false)}
+        />
+      )}
+
+      {/* Manage Round SPRs Modal */}
+      {selectedRoundForSprs && (
+        <ManageRoundSprsModal
+          round={selectedRoundForSprs}
+          onClose={() => setSelectedRoundForSprs(null)}
+        />
+      )}
     </div>
     </ErrorBoundary>
   );
