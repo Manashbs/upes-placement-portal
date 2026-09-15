@@ -71,7 +71,9 @@ export const CompanyProfileView: React.FC<CompanyProfileViewProps> = ({ company,
 
   // Find drives & rounds for this company
   const companyDrives = (drives || []).filter((d) => d && (d.companyId === company.id || d.companyName === company.name));
-  const companyRounds = (rounds || []).filter((r) => r && (r.companyId === company.id || r.companyName === company.name));
+  const companyRounds = (rounds || [])
+    .filter((r) => r && (r.companyId === company.id || r.companyName === company.name))
+    .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
   const companyOffers = (offers || []).filter((o) => o && (o.companyId === company.id || o.companyName === company.name));
 
   const isCompleted = company.status === 'COMPLETED';

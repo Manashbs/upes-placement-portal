@@ -30,9 +30,11 @@ export const DutyListModal: React.FC<DutyListModalProps> = ({ company, onClose }
   const { rounds, dutyAssignments, sprs } = usePortal();
   const [copied, setCopied] = useState(false);
 
-  // Rounds for this company
+  // Rounds for this company sorted sequentially Round 1, Round 2, ...
   const compRounds = useMemo(() => {
-    return rounds.filter((r) => r.companyId === company.id || r.companyName === company.name);
+    return rounds
+      .filter((r) => r.companyId === company.id || r.companyName === company.name)
+      .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
   }, [rounds, company]);
 
   // Overall totals
@@ -155,6 +157,9 @@ export const DutyListModal: React.FC<DutyListModalProps> = ({ company, onClose }
             compRounds.map((rnd) => {
               const breakdown = getRoundVenueBreakdown(rnd, dutyAssignments, sprs);
               const roundSprCount = rnd.assignedSprIds?.length || 0;
+              const cleanRoundName = rnd.name
+                .replace(new RegExp(`^Round\\s*${rnd.roundNumber}\\s*[:\\-]?\\s*`, 'i'), '')
+                .trim();
 
               return (
                 <div
@@ -162,23 +167,18 @@ export const DutyListModal: React.FC<DutyListModalProps> = ({ company, onClose }
                   className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs"
                 >
                   {/* Round Header */}
-                  <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
+                  <div className="px-5 py-3 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
                     <div className="flex items-center space-x-2.5">
                       <span className="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 font-black text-xs flex items-center justify-center">
                         R{rnd.roundNumber}
                       </span>
-                      <span className="font-extrabold text-slate-900 text-sm">{rnd.name}</span>
+                      <span className="font-extrabold text-slate-900 text-sm">
+                        Round {rnd.roundNumber}: {cleanRoundName || rnd.name}
+                      </span>
                     </div>
 
-                    <div className="flex items-center space-x-3 text-xs text-slate-500 font-semibold">
-                      <span className="flex items-center space-x-1">
-                        <Clock className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{rnd.startTime && rnd.endTime ? `${rnd.startTime} - ${rnd.endTime}` : 'Full Day'}</span>
-                      </span>
-                      <span>•</span>
-                      <span className="text-amber-600 font-extrabold">
-                        {roundSprCount} SPR{roundSprCount === 1 ? '' : 's'} Allotted
-                      </span>
+                    <div className="text-xs text-amber-600 font-extrabold">
+                      {roundSprCount} SPR{roundSprCount === 1 ? '' : 's'} Allotted
                     </div>
                   </div>
 
@@ -208,19 +208,11 @@ export const DutyListModal: React.FC<DutyListModalProps> = ({ company, onClose }
                             {bg.sprs.map((spr, sIdx) => (
                               <div
                                 key={sIdx}
-                                className="bg-white p-2 rounded-lg border border-slate-200/80 flex items-center justify-between shadow-2xs"
+                                className="bg-white px-3 py-2 rounded-xl border border-slate-200/80 flex items-center justify-between shadow-2xs"
                               >
-                                <div>
-                                  <div className="text-xs font-extrabold text-slate-900 leading-tight">
-                                    {spr.name}
-                                  </div>
-                                  <div className="text-[10px] text-slate-400">
-                                    SAP: {spr.sapId || spr.id} • {spr.branch || 'B.Tech'}
-                                  </div>
+                                <div className="text-xs font-extrabold text-slate-900">
+                                  {spr.name}
                                 </div>
-                                <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 font-black px-1.5 py-0.5 rounded">
-                                  Duty Active
-                                </span>
                               </div>
                             ))}
                           </div>

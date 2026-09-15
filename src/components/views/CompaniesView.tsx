@@ -150,7 +150,9 @@ export const CompaniesView: React.FC = () => {
   const handleExportRoster = () => {
     const exportData: any[] = [];
     companies.forEach((comp) => {
-      const compRounds = rounds.filter((r) => r.companyId === comp.id || r.companyName === comp.name);
+      const compRounds = rounds
+        .filter((r) => r.companyId === comp.id || r.companyName === comp.name)
+        .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
       compRounds.forEach((rnd) => {
         const assignedSprNames = (rnd.assignedSprIds || [])
           .map((id) => sprs.find((s) => s.id === id)?.name || id)
@@ -177,17 +179,19 @@ export const CompaniesView: React.FC = () => {
     e.preventDefault();
     if (!newCompName.trim()) return;
 
+    const primaryDriveDate = roundsList[0]?.date || new Date().toISOString().split('T')[0];
+
     const formattedRounds: RoundConfigInput[] = roundsList.map((r) => ({
       name: r.name.trim(),
       venues: r.venues.filter(Boolean),
       venue: r.venues.filter(Boolean).join(', '),
-      date: r.date || driveDate,
+      date: r.date || primaryDriveDate,
       sprsNeeded: r.sprsNeeded,
     }));
 
     addCompany({
       name: newCompName.trim(),
-      driveDate,
+      driveDate: primaryDriveDate,
       roundsConfig: formattedRounds,
     });
 
@@ -303,7 +307,9 @@ export const CompaniesView: React.FC = () => {
       {/* Company Cards Grid with Inline Rounds & SPR Allotments */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {filteredCompanies.map((comp) => {
-          const compRounds = rounds.filter((r) => r.companyId === comp.id || r.companyName === comp.name);
+          const compRounds = rounds
+            .filter((r) => r.companyId === comp.id || r.companyName === comp.name)
+            .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
           const uniqueVenues = Array.from(new Set(compRounds.map((r) => r.venue).filter(Boolean)));
           const totalSprsAssigned = compRounds.reduce((acc, r) => acc + (r.assignedSprIds?.length || 0), 0);
 
@@ -554,33 +560,18 @@ export const CompaniesView: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1.5">
-                      Company Name *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Google, Microsoft, TCS"
-                      value={newCompName}
-                      onChange={(e) => setNewCompName(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500/50"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1.5">
-                      Drive Date *
-                    </label>
-                    <input
-                      type="date"
-                      required
-                      value={driveDate}
-                      onChange={(e) => setDriveDate(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500/50"
-                    />
-                  </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1.5 text-xs">
+                    Company Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Google, Microsoft, TCS"
+                    value={newCompName}
+                    onChange={(e) => setNewCompName(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-amber-500/50"
+                  />
                 </div>
               </div>
 

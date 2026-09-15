@@ -108,9 +108,9 @@ export function exportCompanyDutyListExcel({
   dutyAssignments?: SPRDutyAssignment[];
   sprs?: SPR[];
 }): void {
-  const compRounds = rounds.filter(
-    (r) => r.companyId === company.id || r.companyName === company.name
-  );
+  const compRounds = rounds
+    .filter((r) => r.companyId === company.id || r.companyName === company.name)
+    .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
 
   const rows: any[] = [];
   let serial = 1;
@@ -127,7 +127,7 @@ export function exportCompanyDutyListExcel({
           'Round #': `Round ${rnd.roundNumber}`,
           'Round Name': rnd.name,
           'Assigned Venue': bg.venue,
-          'Time / Shift': rnd.startTime && rnd.endTime ? `${rnd.startTime} - ${rnd.endTime}` : 'Full Day',
+          'Time / Shift': 'Full Day',
           'SPR Name': 'No SPR Assigned Yet',
           'SPR SAP ID': '-',
           Branch: '-',
@@ -145,7 +145,7 @@ export function exportCompanyDutyListExcel({
             'Round #': `Round ${rnd.roundNumber}`,
             'Round Name': rnd.name,
             'Assigned Venue': bg.venue,
-            'Time / Shift': rnd.startTime && rnd.endTime ? `${rnd.startTime} - ${rnd.endTime}` : 'Full Day',
+            'Time / Shift': 'Full Day',
             'SPR Name': spr.name,
             'SPR SAP ID': spr.sapId || spr.id,
             Branch: spr.branch || 'B.Tech CSE',
@@ -188,7 +188,7 @@ export function exportCompanyDutyListExcel({
     { wch: 10 }, // Round #
     { wch: 32 }, // Round Name
     { wch: 26 }, // Assigned Venue
-    { wch: 18 }, // Time / Shift
+    { wch: 14 }, // Time / Shift
     { wch: 22 }, // SPR Name
     { wch: 14 }, // SPR SAP ID
     { wch: 22 }, // Branch
@@ -207,6 +207,8 @@ export function exportCompanyDutyListExcel({
 
 /**
  * Generates formatted WhatsApp announcement string for placement coordinators.
+ * Sequenced by Round 1, Round 2, ...
+ * Prints only the SPR names under each venue without SAP IDs and without time.
  */
 export function generateWhatsAppDutyRoster({
   company,
@@ -219,9 +221,9 @@ export function generateWhatsAppDutyRoster({
   dutyAssignments?: SPRDutyAssignment[];
   sprs?: SPR[];
 }): string {
-  const compRounds = rounds.filter(
-    (r) => r.companyId === company.id || r.companyName === company.name
-  );
+  const compRounds = rounds
+    .filter((r) => r.companyId === company.id || r.companyName === company.name)
+    .sort((a, b) => (a.roundNumber || 0) - (b.roundNumber || 0));
 
   let text = `📢 *UPES CAREER SERVICES & PLACEMENT CELL*\n`;
   text += `📋 *SPR OFFICIAL DUTY ROSTER*\n`;
@@ -230,8 +232,10 @@ export function generateWhatsAppDutyRoster({
   text += `-----------------------------------------\n\n`;
 
   compRounds.forEach((rnd) => {
-    text += `🔹 *Round ${rnd.roundNumber}: ${rnd.name}*\n`;
-    text += `⏰ *Time:* ${rnd.startTime && rnd.endTime ? `${rnd.startTime} - ${rnd.endTime}` : 'Full Day'}\n`;
+    const cleanName = rnd.name
+      .replace(new RegExp(`^Round\\s*${rnd.roundNumber}\\s*[:\\-]?\\s*`, 'i'), '')
+      .trim();
+    text += `🔹 *Round ${rnd.roundNumber}: ${cleanName || rnd.name}*\n`;
 
     const breakdown = getRoundVenueBreakdown(rnd, dutyAssignments, sprs);
     breakdown.forEach((bg) => {
@@ -240,7 +244,7 @@ export function generateWhatsAppDutyRoster({
         text += `   _(None assigned)_\n`;
       } else {
         bg.sprs.forEach((spr) => {
-          text += `   • *${spr.name}* (SAP: ${spr.sapId || spr.id})\n`;
+          text += `   • ${spr.name}\n`;
         });
       }
     });
@@ -249,8 +253,8 @@ export function generateWhatsAppDutyRoster({
 
   text += `⚠️ *Instructions for SPRs:*\n`;
   text += `1. Report at designated venue 30 minutes prior in formal attire with UPES ID card.\n`;
-  text += `2. Ensure your mobile scanner is ready for student QR / Manual attendance.\n`;
-  text += `3. Any emergency swaps must be approved by the Career Services Officer.`;
+  text += `2. Ensure your mobile scanner is ready for candidate attendance.\n`;
+  text += `3. Any emergency swaps must be approved by Career Services Officer.`;
 
   return text;
 }
