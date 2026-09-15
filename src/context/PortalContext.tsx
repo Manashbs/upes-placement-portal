@@ -96,7 +96,8 @@ const PortalContext = createContext<PortalContextType | undefined>(undefined);
 
 export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentRole, setCurrentRole] = useState<UserRole>('PLACEMENT_OFFICER');
-  const [activeTab, setActiveTab] = useState<string>('command-center');
+  const [activeTab, setActiveTab] = useState<string>('rounds');
+
 
   const [students, setStudents] = useState<Student[]>(() => {
     const saved = localStorage.getItem('upes_students');

@@ -41,24 +41,14 @@ const MainContent: React.FC = () => {
     }
 
     switch (activeTab) {
-      case 'command-center':
-        return <CommandCenterView />;
-      case 'companies':
-        return <CompaniesView />;
-      case 'rounds':
-        return <RoundsView />;
-      case 'attendance':
-        return <AttendanceView />;
       case 'spr-rotation':
         return <SPRRotationView />;
-      case 'reports':
-        return <ReportsView />;
-      case 'settings':
-        return <SettingsView />;
+      case 'rounds':
       default:
-        return <SPRRotationView />;
+        return <RoundsView />;
     }
   };
+
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-50 bg-grid-canvas">

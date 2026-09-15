@@ -115,14 +115,15 @@ export const RoundsView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-extrabold tracking-widest text-slate-400 uppercase mb-1">
-            OPERATIONS CALENDAR
+            PROCESS & ATTENDANCE MANAGEMENT
           </div>
           <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">
-            Rounds
+            Process & Attendance
           </h2>
           <p className="text-sm font-medium text-slate-500 max-w-3xl">
-            The operating calendar for every assessment, interview, and recruiter touchpoint.
+            Schedule placement drive rounds, configure venue distribution, mark candidate attendance, and manage SPR duty allocations.
           </p>
+
         </div>
 
         <div className="flex items-center space-x-3">

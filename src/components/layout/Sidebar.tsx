@@ -16,16 +16,8 @@ export const Sidebar: React.FC = () => {
   const { activeTab, setActiveTab, currentRole } = usePortal();
 
   const operationsNav = [
-    { id: 'command-center', label: 'Command center', icon: LayoutDashboard },
-    { id: 'companies', label: 'Companies', icon: Building2 },
-    { id: 'rounds', label: 'Rounds', icon: Calendar },
-    { id: 'attendance', label: 'Attendance', icon: UserCheck, hasDot: true },
-    { id: 'spr-rotation', label: 'SPR rotation', icon: RotateCw },
-    { id: 'reports', label: 'Reports', icon: BarChart3 },
-  ];
-
-  const workspaceNav = [
-    { id: 'settings', label: 'Portal settings', icon: Sliders },
+    { id: 'rounds', label: 'Process Attendance', icon: UserCheck, hasDot: true },
+    { id: 'spr-rotation', label: 'SPR Rotation', icon: RotateCw },
   ];
 
   // If student or SPR role selected, show dedicated portal items
@@ -130,7 +122,7 @@ export const Sidebar: React.FC = () => {
         <div>
           <div className="font-extrabold text-lg tracking-tight text-white leading-tight">UPES</div>
           <div className="text-[10px] tracking-widest uppercase font-semibold text-slate-400">
-            PLACEMENT CELL
+            OPERATIONS DESK
           </div>
         </div>
       </div>
@@ -168,34 +160,8 @@ export const Sidebar: React.FC = () => {
             })}
           </nav>
         </div>
-
-        {/* WORKSPACE Section */}
-        <div>
-          <div className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest px-3 mb-3">
-            WORKSPACE
-          </div>
-          <nav className="space-y-1">
-            {workspaceNav.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                    isActive
-                      ? 'bg-slate-800/90 text-white font-semibold shadow-inner border border-slate-700/60'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-amber-400' : 'text-slate-400'}`} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
-          </nav>
-        </div>
       </div>
     </aside>
   );
 };
+
