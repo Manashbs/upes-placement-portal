@@ -49,6 +49,7 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
   // Manual Allot State
   const [manualSearch, setManualSearch] = useState('');
   const [manualTargetVenue, setManualTargetVenue] = useState<string>('');
+  const [sprToAssignVenue, setSprToAssignVenue] = useState<SPR | null>(null);
 
   // Reassign Venue Modal state
   const [reassignSprId, setReassignSprId] = useState<string | null>(null);
@@ -163,8 +164,8 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
     }
   };
 
-  const handleManualAssign = (sprId: string) => {
-    const target = manualTargetVenue || roundVenues[0];
+  const handleManualAssign = (sprId: string, chosenVenue?: string) => {
+    const target = chosenVenue || manualTargetVenue || roundVenues[0];
     const res = assignSprManuallyToRound(currentRound.id, sprId, target);
     if (res.success) {
       setActionFeedback({ type: 'success', text: res.message || 'SPR assigned successfully.' });
@@ -172,6 +173,14 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
     } else {
       setActionFeedback({ type: 'error', text: res.message || 'Failed to assign SPR.' });
       setTimeout(() => setActionFeedback(null), 4000);
+    }
+  };
+
+  const onInitiateManualAssign = (spr: SPR) => {
+    if (roundVenues.length > 1) {
+      setSprToAssignVenue(spr);
+    } else {
+      handleManualAssign(spr.id, roundVenues[0]);
     }
   };
 
@@ -470,7 +479,7 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
                         </span>
                       ) : (
                         <button
-                          onClick={() => handleManualAssign(spr.id)}
+                          onClick={() => onInitiateManualAssign(spr)}
                           className="inline-flex items-center space-x-1.5 bg-slate-900 hover:bg-amber-500 hover:text-slate-950 text-white text-xs font-extrabold px-3 py-1.5 rounded-xl transition-all cursor-pointer"
                         >
                           <UserPlus className="w-3.5 h-3.5" />
@@ -597,6 +606,79 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
           </button>
         </div>
       </div>
+
+      {/* Dedicated Venue Selection Prompt when manually assigning */}
+      {sprToAssignVenue && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl border border-slate-200 p-6 space-y-5 animate-in zoom-in-95">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-[11px] font-black text-amber-600 uppercase tracking-wider mb-0.5">
+                  Select Venue • Round {currentRound.roundNumber}
+                </div>
+                <h4 className="text-lg font-black text-slate-900">
+                  Assign {sprToAssignVenue.name}
+                </h4>
+                <p className="text-xs text-slate-500 mt-1">
+                  Which venue in <strong>{currentRound.name}</strong> should <strong>{sprToAssignVenue.name}</strong> be assigned to?
+                </p>
+              </div>
+              <button
+                onClick={() => setSprToAssignVenue(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Venue selection options */}
+            <div className="space-y-2.5">
+              {roundVenues.map((venueName) => {
+                const countInVenue = venueBreakdown.find((vb) => vb.venue === venueName)?.sprs.length || 0;
+                return (
+                  <button
+                    key={venueName}
+                    type="button"
+                    onClick={() => {
+                      const sprId = sprToAssignVenue.id;
+                      setSprToAssignVenue(null);
+                      handleManualAssign(sprId, venueName);
+                    }}
+                    className="w-full flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 hover:border-amber-500 hover:bg-amber-50/60 transition-all text-left cursor-pointer group"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="w-9 h-9 rounded-xl bg-slate-100 group-hover:bg-amber-500 group-hover:text-slate-950 flex items-center justify-center text-slate-700 font-bold transition-colors">
+                        <MapPin className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-black text-slate-900 group-hover:text-amber-950">
+                          {venueName}
+                        </div>
+                        <div className="text-[11px] font-semibold text-slate-400 group-hover:text-amber-800/80">
+                          Currently assigned: {countInVenue} SPR{countInVenue === 1 ? '' : 's'}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-xs font-black text-slate-700 group-hover:text-slate-950 bg-slate-100 group-hover:bg-amber-400 px-3 py-1.5 rounded-xl transition-colors">
+                      Assign Here →
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setSprToAssignVenue(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

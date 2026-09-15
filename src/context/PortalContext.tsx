@@ -1505,6 +1505,50 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addAuditLog('MANUAL_ATTENDANCE_OVERRIDE', `Manual override set to ${status} for SAP ${cleanSap}. Reason: ${reason}`);
   };
 
+  const getPreservedRoundVenueAssignments = (
+    round: Round,
+    roundVenues: string[],
+    existingDutyAssignments: SPRDutyAssignment[]
+  ): { venue: string; sprIds: string[] }[] => {
+    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
+      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: [...va.sprIds] }))
+      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
+
+    roundVenues.forEach((rv) => {
+      if (!currentVA.some((va) => va.venue === rv)) {
+        currentVA.push({ venue: rv, sprIds: [] });
+      }
+    });
+
+    const assignedIds = round.assignedSprIds || [];
+    const accountedIds = new Set<string>();
+    currentVA.forEach((va) => {
+      va.sprIds = va.sprIds.filter((id) => assignedIds.includes(id));
+      va.sprIds.forEach((id) => accountedIds.add(id));
+    });
+
+    const roundDuties = existingDutyAssignments.filter((d) => d.roundId === round.id);
+    assignedIds.forEach((id) => {
+      if (!accountedIds.has(id)) {
+        const duty = roundDuties.find((d) => d.sprId === id);
+        let targetV = duty?.venue && roundVenues.includes(duty.venue) ? duty.venue : undefined;
+        if (!targetV) {
+          const sortedVA = [...currentVA].sort((a, b) => a.sprIds.length - b.sprIds.length);
+          targetV = sortedVA[0].venue;
+        }
+        const grp = currentVA.find((va) => va.venue === targetV);
+        if (grp) {
+          grp.sprIds.push(id);
+        } else {
+          currentVA[0].sprIds.push(id);
+        }
+        accountedIds.add(id);
+      }
+    });
+
+    return currentVA;
+  };
+
   const allocateSprsToRound = (roundId: string, countNeeded: number, targetVenue?: string) => {
     const round = rounds.find((r) => r.id === roundId);
     if (!round) return { success: false, count: 0, message: 'Round not found' };
@@ -1521,16 +1565,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const selectedIds = allocation.selectedSprs.map((s) => s.id);
 
-    // Current venueAssignments or initialize
-    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
-      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: [...va.sprIds] }))
-      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
-
-    roundVenues.forEach((rv) => {
-      if (!currentVA.some((va) => va.venue === rv)) {
-        currentVA.push({ venue: rv, sprIds: [] });
-      }
-    });
+    // Current venueAssignments preserving all already assigned SPRs
+    let currentVA = getPreservedRoundVenueAssignments(round, roundVenues, dutyAssignments);
 
     const newDuties: SPRDutyAssignment[] = [];
 
@@ -1573,23 +1609,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             ...r,
             venues: roundVenues,
             venueAssignments: currentVA,
-            assignedSprIds: Array.from(new Set([...r.assignedSprIds, ...selectedIds])),
+            assignedSprIds: [...r.assignedSprIds, ...selectedIds],
           }
         : r
     );
     setRounds(nextRounds);
 
-    // Update SPR used flags and duty counts
-    const nextSprs = sprs.map((s) => {
-      const wasSelected = selectedIds.includes(s.id);
-      const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
-      const updatedUsedInCycle = allocation.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
-      return {
-        ...s,
-        totalDuties: updatedTotalDuties,
-        usedInCurrentCycle: updatedUsedInCycle,
-      };
-    });
+    // Update SPRs usage and duty counts
+    const nextSprs = sprs.map((s) =>
+      selectedIds.includes(s.id)
+        ? {
+            ...s,
+            totalDuties: s.totalDuties + 1,
+            usedInCurrentCycle: true,
+          }
+        : s
+    );
     setSprs(nextSprs);
 
     const nextDuties = [...newDuties, ...dutyAssignments];
@@ -1615,8 +1650,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch {}
 
     addAuditLog(
-      'SPR_ALLOCATED',
-      `Auto-allocated ${allocation.selectedSprs.length} SPRs (${allocation.selectedSprs.map((s) => s.name).join(', ')}) to ${round.companyName} (${round.name}) divided equally across venues.`
+      'AUTO_SPR_ALLOCATED',
+      `Allocated ${allocation.selectedSprs.length} SPR(s) to ${round.companyName} (${round.name}). Venue: ${
+        targetVenue || 'Equally distributed'
+      }`
     );
 
     return {
@@ -1646,15 +1683,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
     if (roundVenues.length === 0) roundVenues = ['Campus Venue'];
 
-    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
-      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: [...va.sprIds] }))
-      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
-
-    roundVenues.forEach((rv) => {
-      if (!currentVA.some((va) => va.venue === rv)) {
-        currentVA.push({ venue: rv, sprIds: [] });
-      }
-    });
+    // Preserve ALL existing assigned SPRs so none are wiped out!
+    let currentVA = getPreservedRoundVenueAssignments(round, roundVenues, dutyAssignments);
 
     let assignedVenue = targetVenue;
     if (!assignedVenue || !roundVenues.includes(assignedVenue)) {
@@ -1731,7 +1761,13 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const spr = sprs.find((s) => s.id === sprId);
     const sprName = spr ? spr.name : sprId;
 
-    const nextVA = (round.venueAssignments || []).map((va) => ({
+    let roundVenues = (round.venues && round.venues.length > 0)
+      ? round.venues.filter(Boolean)
+      : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+    if (roundVenues.length === 0) roundVenues = ['Campus Venue'];
+
+    let currentVA = getPreservedRoundVenueAssignments(round, roundVenues, dutyAssignments);
+    const nextVA = currentVA.map((va) => ({
       venue: va.venue,
       sprIds: va.sprIds.filter((id) => id !== sprId),
     }));
@@ -1740,6 +1776,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       r.id === roundId
         ? {
             ...r,
+            venues: roundVenues,
             venueAssignments: nextVA,
             assignedSprIds: r.assignedSprIds.filter((id) => id !== sprId),
           }
@@ -1786,10 +1823,13 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let roundVenues = (round.venues && round.venues.length > 0)
       ? round.venues.filter(Boolean)
       : (round.venue ? round.venue.split(',').map((v) => v.trim()).filter(Boolean) : ['Campus Venue']);
+    if (roundVenues.length === 0) roundVenues = ['Campus Venue'];
 
-    let currentVA: { venue: string; sprIds: string[] }[] = (round.venueAssignments && round.venueAssignments.length > 0)
-      ? round.venueAssignments.map((va) => ({ venue: va.venue, sprIds: va.sprIds.filter((id) => id !== sprId) }))
-      : roundVenues.map((v) => ({ venue: v, sprIds: [] }));
+    let currentVA = getPreservedRoundVenueAssignments(round, roundVenues, dutyAssignments);
+    currentVA = currentVA.map((va) => ({
+      venue: va.venue,
+      sprIds: va.sprIds.filter((id) => id !== sprId),
+    }));
 
     let targetGroup = currentVA.find((va) => va.venue === newVenue);
     if (!targetGroup) {
@@ -1802,6 +1842,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       r.id === roundId
         ? {
             ...r,
+            venues: roundVenues,
             venueAssignments: currentVA,
           }
         : r

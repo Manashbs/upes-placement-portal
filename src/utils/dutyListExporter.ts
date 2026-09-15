@@ -44,54 +44,57 @@ export function getRoundVenueBreakdown(
     venues = ['Campus Venue'];
   }
 
-  // 2. If round has explicit venueAssignments stored
-  if (round.venueAssignments && round.venueAssignments.length > 0) {
-    return round.venueAssignments.map((va) => ({
-      venue: va.venue,
-      sprs: (va.sprIds || [])
-        .map((id) => allSprs.find((s) => s.id === id) || createFallbackSpr(id))
-        .filter(Boolean),
-    }));
-  }
-
-  // 3. Check if dutyAssignments for this round have individual venues recorded
-  const roundDuties = dutyAssignments.filter((d) => d.roundId === round.id);
-  const hasSpecificDutyVenues = roundDuties.some((d) => d.venue && venues.includes(d.venue.trim()));
-
-  if (hasSpecificDutyVenues) {
-    const venueMap: Record<string, SPR[]> = {};
-    venues.forEach((v) => {
-      venueMap[v] = [];
-    });
-
-    roundDuties.forEach((d) => {
-      const v = d.venue && venueMap[d.venue] ? d.venue : venues[0];
-      const spr = allSprs.find((s) => s.id === d.sprId) || createFallbackSpr(d.sprId, d.sprName);
-      venueMap[v].push(spr);
-    });
-
-    return venues.map((v) => ({
-      venue: v,
-      sprs: venueMap[v] || [],
-    }));
-  }
-
-  // 4. Equal Division Fallback: Divide round.assignedSprIds equally across all venues
-  const assignedSprObjects = (round.assignedSprIds || []).map(
-    (id) => allSprs.find((s) => s.id === id) || createFallbackSpr(id)
-  );
-
-  const venueBuckets: VenueSprGroup[] = venues.map((v) => ({
-    venue: v,
-    sprs: [],
-  }));
-
-  assignedSprObjects.forEach((spr, idx) => {
-    const targetIdx = idx % venues.length;
-    venueBuckets[targetIdx].sprs.push(spr);
+  const assignedSprIds = round.assignedSprIds || [];
+  const venueMap: Record<string, SPR[]> = {};
+  venues.forEach((v) => {
+    venueMap[v] = [];
   });
 
-  return venueBuckets;
+  const accountedSprIds = new Set<string>();
+
+  // 2. If round has explicit venueAssignments stored, add those
+  if (round.venueAssignments && round.venueAssignments.length > 0) {
+    round.venueAssignments.forEach((va) => {
+      const v = venues.includes(va.venue) ? va.venue : venues[0];
+      (va.sprIds || []).forEach((id) => {
+        if (assignedSprIds.includes(id) && !accountedSprIds.has(id)) {
+          const spr = allSprs.find((s) => s.id === id) || createFallbackSpr(id);
+          venueMap[v].push(spr);
+          accountedSprIds.add(id);
+        }
+      });
+    });
+  }
+
+  // 3. Check dutyAssignments for this round to recover any assigned SPRs
+  const roundDuties = dutyAssignments.filter((d) => d.roundId === round.id);
+  roundDuties.forEach((d) => {
+    if (assignedSprIds.includes(d.sprId) && !accountedSprIds.has(d.sprId)) {
+      const v = d.venue && venues.includes(d.venue.trim()) ? d.venue.trim() : venues[0];
+      const spr = allSprs.find((s) => s.id === d.sprId) || createFallbackSpr(d.sprId, d.sprName);
+      venueMap[v].push(spr);
+      accountedSprIds.add(d.sprId);
+    }
+  });
+
+  // 4. ANY remaining SPR in assignedSprIds MUST be distributed equally across all venues
+  // This guarantees that if venueAssignments was partial or empty, ALL assigned SPRs are displayed!
+  const remainingSprIds = assignedSprIds.filter((id) => !accountedSprIds.has(id));
+  remainingSprIds.forEach((id) => {
+    // Pick the venue that currently has the fewest assigned SPRs
+    const targetVenue = venues.reduce((best, curr) => {
+      return (venueMap[curr].length < venueMap[best].length) ? curr : best;
+    }, venues[0]);
+
+    const spr = allSprs.find((s) => s.id === id) || createFallbackSpr(id);
+    venueMap[targetVenue].push(spr);
+    accountedSprIds.add(id);
+  });
+
+  return venues.map((v) => ({
+    venue: v,
+    sprs: venueMap[v] || [],
+  }));
 }
 
 /**
