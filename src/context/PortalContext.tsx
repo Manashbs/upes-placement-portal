@@ -36,6 +36,7 @@ import {
   getFromIDB,
   fetchRemoteDatabase,
   persistToRemoteDatabase,
+  pushImmediateToRemote,
   sanitizeUsers,
   sanitizeSPRs,
 } from '../utils/portalDb';
@@ -217,14 +218,14 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies);
         if (idbDrives && idbDrives.length > 0) setDrives(idbDrives);
         if (idbRounds && idbRounds.length > 0) {
-          const valid = idbRounds
-            .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
-            .map((r) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r));
+          const valid = (idbRounds as Round[])
+            .filter((r: Round) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+            .map((r: Round) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r));
           setRounds(valid);
         }
         if (idbRoundStudents && idbRoundStudents.length > 0) {
           // Strictly isolate candidates: only retain records for rounds with uploaded sheets
-          setRoundStudents(idbRoundStudents.filter((rs) => hasSheetForRound(rs.roundId)));
+          setRoundStudents((idbRoundStudents as RoundStudent[]).filter((rs: RoundStudent) => hasSheetForRound(rs.roundId)));
         }
         if (idbStudents && idbStudents.length > 0) setStudents(idbStudents);
         if (idbUsers && idbUsers.length > 0) setUsers(sanitizeUsers(idbUsers));
@@ -782,11 +783,73 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     }
 
+    // Periodic background sync for core database collections (companies, drives, rounds) across all devices
+    const syncDatabaseFromCloud = async () => {
+      try {
+        const remoteData = await fetchRemoteDatabase();
+        if (!remoteData) return;
+
+        if (Array.isArray(remoteData.companies) && remoteData.companies.length > 0) {
+          setCompanies((prev) => {
+            const existingIds = new Set(prev.map((c) => c.id));
+            const toAdd = remoteData.companies!.filter((rc) => !existingIds.has(rc.id));
+            if (toAdd.length > 0) {
+              const merged = [...toAdd, ...prev];
+              try {
+                localStorage.setItem('upes_companies', JSON.stringify(merged));
+                saveToIDB('companies', merged);
+              } catch {}
+              return merged;
+            }
+            return prev;
+          });
+        }
+
+        if (Array.isArray(remoteData.drives) && remoteData.drives.length > 0) {
+          setDrives((prev) => {
+            const existingIds = new Set(prev.map((d) => d.id));
+            const toAdd = remoteData.drives!.filter((rd) => !existingIds.has(rd.id));
+            if (toAdd.length > 0) {
+              const merged = [...toAdd, ...prev];
+              try {
+                localStorage.setItem('upes_drives', JSON.stringify(merged));
+                saveToIDB('drives', merged);
+              } catch {}
+              return merged;
+            }
+            return prev;
+          });
+        }
+
+        if (Array.isArray(remoteData.rounds) && remoteData.rounds.length > 0) {
+          setRounds((prev) => {
+            const existingIds = new Set(prev.map((r) => r.id));
+            const toAdd = remoteData.rounds!.filter(
+              (rr) => !existingIds.has(rr.id) && rr.companyName !== 'Company' && rr.companyId !== 'comp-1' && rr.companyId
+            );
+            if (toAdd.length > 0) {
+              const merged = [...prev, ...toAdd];
+              try {
+                localStorage.setItem('upes_rounds', JSON.stringify(merged));
+                saveToIDB('rounds', merged);
+              } catch {}
+              return merged;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        console.warn('[PortalDB] Background sync notice:', err);
+      }
+    };
+
     const pollInterval = setInterval(reloadFromStorage, 1000);
     const cloudPollInterval = setInterval(syncFromCloud, 2500);
     const userPollInterval = setInterval(syncUsersFromCloud, 3000);
+    const dbPollInterval = setInterval(syncDatabaseFromCloud, 3500);
     syncFromCloud(); // initial fetch on mount
     syncUsersFromCloud();
+    syncDatabaseFromCloud();
 
     return () => {
       window.removeEventListener('storage', handleStorage);
@@ -796,6 +859,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       clearInterval(pollInterval);
       clearInterval(cloudPollInterval);
       clearInterval(userPollInterval);
+      clearInterval(dbPollInterval);
       if (bc) bc.close();
       if (userBc) userBc.close();
     };
@@ -1004,11 +1068,24 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         localStorage.setItem('upes_spr_cycle', JSON.stringify(currentCycleState));
       } catch {}
 
+      // Immediately synchronize created company, drive, rounds, and SPR assignments across all devices
+      pushImmediateToRemote({
+        companies: [createdComp, ...companies],
+        drives: [newDrive, ...drives],
+        rounds: currentRoundsList,
+        sprs: currentSprPool,
+        dutyAssignments: [...newDuties, ...dutyAssignments],
+      });
+
       addAuditLog(
         'CREATE_COMPANY',
         `Created company ${payload.name} with ${newRoundsCreated.length} auto-generated rounds and fair SPR allotments across ${payload.venues?.length || 1} venue(s).`
       );
     } else {
+      pushImmediateToRemote({
+        companies: [createdComp, ...companies],
+        drives: [newDrive, ...drives],
+      });
       addAuditLog('CREATE_COMPANY', `Added company profile for ${payload.name}.`);
     }
   };
@@ -1072,10 +1149,20 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }));
 
     // Remove company, drives, rounds, and associated round students
-    setCompanies((prev) => prev.filter((c) => c.id !== id));
-    setDrives((prev) => prev.filter((d) => d.companyId !== id && d.companyName !== compName));
-    setRounds((prev) => prev.filter((r) => r.companyId !== id && r.companyName !== compName));
+    const updatedCompanies = companies.filter((c) => c.id !== id);
+    const updatedDrives = drives.filter((d) => d.companyId !== id && d.companyName !== compName);
+    const updatedRounds = rounds.filter((r) => r.companyId !== id && r.companyName !== compName);
+
+    setCompanies(updatedCompanies);
+    setDrives(updatedDrives);
+    setRounds(updatedRounds);
     setRoundStudents((prev) => prev.filter((rs) => !deletedRoundIds.has(rs.roundId) && !rs.roundId.includes(id)));
+
+    pushImmediateToRemote({
+      companies: updatedCompanies,
+      drives: updatedDrives,
+      rounds: updatedRounds,
+    });
 
     addAuditLog('DELETE_COMPANY', `Deleted company process ${compName}, cleared rounds, and reduced assigned SPR duty counts.`);
   };

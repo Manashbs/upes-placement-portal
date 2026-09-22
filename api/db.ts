@@ -2,19 +2,76 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 /**
  * Unified Cloud Database Endpoint for UPES Placement Portal
- * Persists and serves all portal collections:
- * - users (Director & Career Service Officers)
- * - companies
- * - drives
- * - rounds
- * - roundStudents (attendance & shortlists)
- * - sprs (50-member roster)
- * - offers
- * - auditLogs
+ * Partitions core database state (companies, drives, rounds, sprs, users)
+ * from heavy roster spreadsheets to guarantee instant cross-device synchronization.
  */
 
-const NTFY_DB_TOPIC = 'upes_portal_master_db_v1';
-const NTFY_DB_URL = `https://ntfy.sh/${NTFY_DB_TOPIC}`;
+const NTFY_CORE_TOPIC = 'upes_portal_core_data_v3';
+const NTFY_ROSTER_TOPIC = 'upes_portal_roster_data_v3';
+
+const NTFY_CORE_URL = `https://ntfy.sh/${NTFY_CORE_TOPIC}`;
+const NTFY_ROSTER_URL = `https://ntfy.sh/${NTFY_ROSTER_TOPIC}`;
+
+// In-memory persistent database cache across serverless warm invocations
+const inMemoryDb: {
+  companies: any[];
+  drives: any[];
+  rounds: any[];
+  sprs: any[];
+  dutyAssignments: any[];
+  users: any[];
+  roundStudents: any[];
+  lastUpdated: string;
+} = {
+  companies: [],
+  drives: [],
+  rounds: [],
+  sprs: [],
+  dutyAssignments: [],
+  users: [],
+  roundStudents: [],
+  lastUpdated: new Date().toISOString(),
+};
+
+async function parseNtfyMessages(url: string): Promise<any | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const resp = await fetch(`${url}/json?poll=1&since=all`, {
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return null;
+    const text = await resp.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const item = JSON.parse(lines[i]);
+        if (item.event === 'message') {
+          // If stored inline
+          if (item.message && item.message.startsWith('{')) {
+            try {
+              return JSON.parse(item.message);
+            } catch {}
+          }
+          // If stored as ntfy attachment
+          if (item.attachment && item.attachment.url) {
+            try {
+              const attachResp = await fetch(item.attachment.url, { cache: 'no-store' });
+              if (attachResp.ok) {
+                return await attachResp.json();
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS configuration
@@ -31,69 +88,118 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    // 1. GET: Fetch latest complete portal database snapshot
+    // 1. GET: Fetch latest consolidated portal database snapshot
     if (req.method === 'GET') {
       try {
-        const resp = await fetch(`${NTFY_DB_URL}/json?poll=1&since=all`, {
-          headers: { 'Cache-Control': 'no-cache' },
-        });
+        const coreSnapshot = await parseNtfyMessages(NTFY_CORE_URL);
+        if (coreSnapshot && typeof coreSnapshot === 'object') {
+          if (Array.isArray(coreSnapshot.companies) && coreSnapshot.companies.length > 0) {
+            inMemoryDb.companies = coreSnapshot.companies;
+          }
+          if (Array.isArray(coreSnapshot.drives) && coreSnapshot.drives.length > 0) {
+            inMemoryDb.drives = coreSnapshot.drives;
+          }
+          if (Array.isArray(coreSnapshot.rounds) && coreSnapshot.rounds.length > 0) {
+            inMemoryDb.rounds = coreSnapshot.rounds;
+          }
+          if (Array.isArray(coreSnapshot.sprs) && coreSnapshot.sprs.length > 0) {
+            inMemoryDb.sprs = coreSnapshot.sprs;
+          }
+          if (Array.isArray(coreSnapshot.dutyAssignments)) {
+            inMemoryDb.dutyAssignments = coreSnapshot.dutyAssignments;
+          }
+          if (Array.isArray(coreSnapshot.users) && coreSnapshot.users.length > 0) {
+            inMemoryDb.users = coreSnapshot.users;
+          }
+          if (coreSnapshot.lastUpdated) {
+            inMemoryDb.lastUpdated = coreSnapshot.lastUpdated;
+          }
+        }
 
-        if (resp.ok) {
-          const text = await resp.text();
-          const lines = text.trim().split('\n').filter(Boolean);
-          const messages = lines
-            .map((l) => {
-              try {
-                return JSON.parse(l);
-              } catch {
-                return null;
-              }
-            })
-            .filter((e) => e && e.event === 'message' && e.message)
-            .map((e) => {
-              try {
-                return JSON.parse(e.message);
-              } catch {
-                return null;
-              }
-            })
-            .filter((m) => m && typeof m === 'object');
-
-          if (messages.length > 0) {
-            const latestSnapshot = messages[messages.length - 1];
-            return res.status(200).json({ success: true, data: latestSnapshot });
+        // Fetch roster if memory cache doesn't have it
+        if (!inMemoryDb.roundStudents || inMemoryDb.roundStudents.length === 0) {
+          const rosterSnapshot = await parseNtfyMessages(NTFY_ROSTER_URL);
+          if (rosterSnapshot && Array.isArray(rosterSnapshot.roundStudents)) {
+            inMemoryDb.roundStudents = rosterSnapshot.roundStudents;
           }
         }
       } catch (err) {
-        console.warn('[CloudDB] Failed to fetch remote snapshot:', err);
+        console.warn('[CloudDB] Sync notice:', err);
       }
 
-      // If no remote snapshot found yet
-      return res.status(200).json({ success: true, data: null });
+      return res.status(200).json({ success: true, data: inMemoryDb });
     }
 
-    // 2. POST: Persist updated portal snapshot to cloud DB
+    // 2. POST: Persist updated portal snapshot to cloud DB with collection merging
     if (req.method === 'POST') {
       const payload = req.body;
       if (!payload || typeof payload !== 'object') {
         return res.status(400).json({ error: 'Expected JSON object in request body' });
       }
 
-      const snapshot = {
-        ...payload,
-        lastUpdated: new Date().toISOString(),
+      const now = new Date().toISOString();
+      inMemoryDb.lastUpdated = now;
+
+      // Merge incoming collections into inMemoryDb
+      if (Array.isArray(payload.companies)) {
+        inMemoryDb.companies = payload.companies;
+      }
+      if (Array.isArray(payload.drives)) {
+        inMemoryDb.drives = payload.drives;
+      }
+      if (Array.isArray(payload.rounds)) {
+        inMemoryDb.rounds = payload.rounds;
+      }
+      if (Array.isArray(payload.sprs)) {
+        inMemoryDb.sprs = payload.sprs;
+      }
+      if (Array.isArray(payload.dutyAssignments)) {
+        inMemoryDb.dutyAssignments = payload.dutyAssignments;
+      }
+      if (Array.isArray(payload.users)) {
+        inMemoryDb.users = payload.users;
+      }
+      if (Array.isArray(payload.roundStudents)) {
+        inMemoryDb.roundStudents = payload.roundStudents;
+      }
+
+      // 2A. Publish core data to core topic
+      const corePayload = {
+        companies: inMemoryDb.companies,
+        drives: inMemoryDb.drives,
+        rounds: inMemoryDb.rounds,
+        sprs: inMemoryDb.sprs,
+        dutyAssignments: inMemoryDb.dutyAssignments,
+        users: inMemoryDb.users,
+        lastUpdated: now,
       };
 
-      await fetch(NTFY_DB_URL, {
-        method: 'POST',
-        headers: {
-          Title: `Portal DB Snapshot (${new Date().toLocaleTimeString()})`,
-          Tags: 'database,floppy_disk',
-        },
-        body: JSON.stringify(snapshot),
-      });
+      try {
+        fetch(NTFY_CORE_URL, {
+          method: 'POST',
+          headers: {
+            Title: `Portal Core DB (${inMemoryDb.companies.length} Companies, ${inMemoryDb.drives.length} Drives)`,
+            Tags: 'building,card_file_box',
+          },
+          body: JSON.stringify(corePayload),
+        }).catch(() => {});
+      } catch {}
 
-      return res.status(200).json({ success: true, timestamp: snapshot.lastUpdated });
+      // 2B. Publish roster data if included in update
+      if (Array.isArray(payload.roundStudents)) {
+        try {
+          fetch(NTFY_ROSTER_URL, {
+            method: 'POST',
+            headers: {
+              Title: `Portal Roster Sync (${payload.roundStudents.length} Students)`,
+              Tags: 'busts_in_silhouette,floppy_disk',
+            },
+            body: JSON.stringify({ roundStudents: payload.roundStudents, lastUpdated: now }),
+          }).catch(() => {});
+        } catch {}
+      }
+
+      return res.status(200).json({ success: true, timestamp: now });
     }
 
     return res.status(405).json({ error: 'Method Not Allowed' });

@@ -7,6 +7,7 @@ import { ExcelUploadModal } from '../modals/ExcelUploadModal';
 import { Round, RoundStudent, Student } from '../../types';
 import { exportRosterExcel, exportAnnotatedAttendanceExcel, generateCandidateAttendanceLink, exportExactSheetWithAttendance } from '../../utils/excelUtils';
 import { hasSheetForRound } from '../../utils/sheetStorage';
+import { downloadHighResRoundQR } from '../../utils/qrUtils';
 
 export const AttendanceView: React.FC = () => {
   const { rounds, roundStudents, students, markAttendance, manualAttendanceOverride, createRound, uploadShortlistForRound, deleteRound, getOriginalExcel, getOriginalExcelRaw, syncFromCloud } = usePortal();
@@ -153,27 +154,7 @@ export const AttendanceView: React.FC = () => {
 
   const handleDownloadInlineQR = () => {
     if (!selectedRound) return;
-    const svgEl = document.getElementById(`inline-qr-${selectedRound.id}`);
-    if (!svgEl) return;
-    const svgData = new XMLSerializer().serializeToString(svgEl);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const img = new Image();
-    img.onload = () => {
-      canvas.width = img.width + 40;
-      canvas.height = img.height + 40;
-      if (ctx) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 20, 20);
-        const pngUrl = canvas.toDataURL('image/png');
-        const dl = document.createElement('a');
-        dl.href = pngUrl;
-        dl.download = `UPES_QR_${selectedRound.companyName}_${selectedRound.name}.png`;
-        dl.click();
-      }
-    };
-    img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+    downloadHighResRoundQR(selectedRound);
   };
 
   return (
@@ -443,17 +424,22 @@ export const AttendanceView: React.FC = () => {
                 id={`inline-qr-${selectedRound.id}`}
                 value={selectedRound.qrToken}
                 size={130}
-                level="H"
-                includeMargin={false}
+                level="M"
+                includeMargin={true}
               />
             </div>
-            <div className="text-center">
+            <div className="text-center space-y-1">
               <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
                 Round QR Code
               </span>
-              <span className="text-[9px] font-mono text-slate-400 block max-w-[140px] truncate">
-                {selectedRound.qrToken.slice(0, 18)}...
-              </span>
+              <button
+                onClick={handleDownloadInlineQR}
+                className="inline-flex items-center space-x-1.5 text-[11px] font-extrabold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                title="Download 300 DPI high-resolution printable attendance poster"
+              >
+                <Download className="w-3 h-3 text-amber-600" />
+                <span>Download Print Poster</span>
+              </button>
             </div>
           </div>
         </div>

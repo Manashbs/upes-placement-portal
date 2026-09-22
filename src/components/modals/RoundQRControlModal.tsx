@@ -4,6 +4,7 @@ import { usePortal } from '../../context/PortalContext';
 import { Round } from '../../types';
 import { Download, RefreshCw, ShieldCheck, MapPin, FileSpreadsheet } from 'lucide-react';
 import { exportRosterExcel, exportExactSheetWithAttendance } from '../../utils/excelUtils';
+import { downloadHighResRoundQR } from '../../utils/qrUtils';
 
 interface RoundQRControlModalProps {
   round: Round | null;
@@ -18,32 +19,7 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
   const currentRoundStudents = roundStudents.filter((rs) => rs.roundId === round.id);
 
   const handleDownloadQR = () => {
-    const svgElement = document.getElementById('round-qr-svg');
-    if (!svgElement) return;
-
-    const svgData = new XMLSerializer().serializeToString(svgElement);
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    const img = new Image();
-
-    img.onload = () => {
-      canvas.width = img.width + 40;
-      canvas.height = img.height + 40;
-      if (ctx) {
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 20, 20);
-        const pngUrl = canvas.toDataURL('image/png');
-        const downloadLink = document.createElement('a');
-        downloadLink.href = pngUrl;
-        downloadLink.download = `UPES_QR_${round.companyName}_${round.name}.png`;
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
-      }
-    };
-
-    img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+    downloadHighResRoundQR(round);
   };
 
   return (
@@ -70,8 +46,8 @@ export const RoundQRControlModal: React.FC<RoundQRControlModalProps> = ({ round,
             <QRCodeSVG
               id="round-qr-svg"
               value={round.qrToken}
-              size={180}
-              level="H"
+              size={200}
+              level="M"
               includeMargin={true}
             />
             <div className="mt-2 text-[10px] font-mono text-slate-400">

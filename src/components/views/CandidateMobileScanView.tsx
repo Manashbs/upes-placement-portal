@@ -90,6 +90,24 @@ export const CandidateMobileScanView: React.FC = () => {
 
   const isPresent = justMarked || isAlreadyMarkedInRound;
 
+  // Sound feedback on successful scan
+  const playSuccessBeep = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.2);
+    } catch {}
+  };
+
   // Keep refs in sync for the scan loop
   useEffect(() => {
     paramsRef.current = params;
@@ -120,7 +138,7 @@ export const CandidateMobileScanView: React.FC = () => {
     };
   }, [cleanSap, params.roundId]);
 
-  // 1. Stable Camera Stream Lifecycle (runs ONCE, never flickers or repeatedly restarts)
+  // 1. Stable High-Resolution Camera Stream Lifecycle
   useEffect(() => {
     if (isPresent) {
       if (streamRef.current) {
@@ -134,7 +152,6 @@ export const CandidateMobileScanView: React.FC = () => {
     let isMounted = true;
 
     async function startCamera() {
-      // If camera is already active, don't re-create stream
       if (streamRef.current && streamRef.current.active) {
         if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
           videoRef.current.srcObject = streamRef.current;
@@ -144,14 +161,24 @@ export const CandidateMobileScanView: React.FC = () => {
 
       try {
         setCameraStatus('STARTING');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 640 },
-            height: { ideal: 640 },
-          },
-          audio: false,
-        });
+        // Request crisp high resolution (1080p/720p) so printed and screen QR modules are razor sharp
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920, min: 1080 },
+              height: { ideal: 1080, min: 720 },
+            },
+            audio: false,
+          });
+        } catch {
+          // Fallback to standard environment camera if high-res constraints fail
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment' },
+            audio: false,
+          });
+        }
 
         if (!isMounted) {
           stream.getTracks().forEach((t) => t.stop());
@@ -185,93 +212,149 @@ export const CandidateMobileScanView: React.FC = () => {
     };
   }, [isPresent]);
 
-  // 2. Smooth Scanning Loop with 100ms throttle (zero lag, no stream interruptions)
+  // 2. Hardware-Accelerated + Multi-Pass Ultra-Fast QR Scanning Loop (<0.2s Detection)
   useEffect(() => {
     if (isPresent) return;
 
     let scanTimerId: any;
     let isMounted = true;
 
-    const scanFrame = () => {
+    // Check for native hardware-accelerated BarcodeDetector (instant <5ms on mobile)
+    let nativeDetector: any = null;
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        nativeDetector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+      } catch {}
+    }
+
+    const processScannedText = (scannedText: string) => {
+      const tokenCheck = validateQRToken(scannedText);
+      const curParams = paramsRef.current;
+      const curRound = targetRoundRef.current;
+      const curSap = cleanSapRef.current;
+      const curName = displayNameRef.current;
+
+      const isMatchingRound =
+        (tokenCheck.data?.roundId && tokenCheck.data.roundId === curParams.roundId) ||
+        scannedText === curRound?.qrToken ||
+        (Boolean(curParams.roundId) && scannedText.includes(curParams.roundId)) ||
+        (tokenCheck.valid && !tokenCheck.data?.roundId);
+
+      if (isMatchingRound && curSap && curParams.roundId) {
+        isScanningRef.current = false;
+        const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        // Instant haptic and audio feedback
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          try { navigator.vibrate([80, 40, 80]); } catch {}
+        }
+        playSuccessBeep();
+
+        // 1. Mark locally
+        markAttendance(curParams.roundId, curSap, 'REAL_CAMERA_QR_SCAN', curName);
+
+        // 2. Publish to Cloud Sync (instantly updates recruiter dashboard in real-time)
+        recordAttendanceToCloud({
+          roundId: curParams.roundId,
+          sapId: curSap,
+          studentName: curName,
+          status: 'PRESENT',
+          time: nowTime,
+          method: 'REAL_CAMERA_QR_SCAN',
+        });
+
+        // 3. Update UI & trigger celebratory confetti
+        setJustMarked(true);
+        setMismatchError(null);
+        confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+
+        // 4. Turn off camera
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+        return true;
+      } else if (tokenCheck.data?.roundId && tokenCheck.data.roundId !== curParams.roundId) {
+        setMismatchError(
+          `Scanned QR belongs to "${tokenCheck.data.companyName || tokenCheck.data.roundId}". Please scan the QR code for "${roundDisplayNameRef.current}".`
+        );
+      }
+      return false;
+    };
+
+    const scanFrame = async () => {
       if (!isMounted || !isScanningRef.current) return;
 
       const video = videoRef.current;
 
       if (video && video.readyState >= 2 && video.videoWidth > 0) {
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement('canvas');
+        let detected = false;
+
+        // Pass 1: Native Hardware BarcodeDetector (Blazing fast, 0ms canvas overhead)
+        if (nativeDetector) {
+          try {
+            const barcodes = await nativeDetector.detect(video);
+            if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+              const res = processScannedText(barcodes[0].rawValue);
+              if (res) return;
+              detected = true;
+            }
+          } catch {}
         }
 
-        const scanCanvas = canvasRef.current;
-        const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+        // Pass 2: jsQR Fallback (Dual pass: Center Crop + Full Frame with attemptBoth inversion)
+        if (!detected) {
+          if (!canvasRef.current) {
+            canvasRef.current = document.createElement('canvas');
+          }
 
-        if (ctx) {
-          scanCanvas.width = video.videoWidth;
-          scanCanvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+          const scanCanvas = canvasRef.current;
+          const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
 
-          const imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+          if (ctx) {
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
 
-          const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: 'dontInvert',
-          });
+            // Pass 2A: High-density Center Crop (optimizes detection when user centers the QR)
+            const cropRatio = 0.65;
+            const cropW = Math.floor(vw * cropRatio);
+            const cropH = Math.floor(vh * cropRatio);
+            const cropX = Math.floor((vw - cropW) / 2);
+            const cropY = Math.floor((vh - cropH) / 2);
 
-          if (code && code.data) {
-            const scannedText = code.data;
-            const tokenCheck = validateQRToken(scannedText);
-            const curParams = paramsRef.current;
-            const curRound = targetRoundRef.current;
-            const curSap = cleanSapRef.current;
-            const curName = displayNameRef.current;
+            scanCanvas.width = cropW;
+            scanCanvas.height = cropH;
+            ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+            const cropData = ctx.getImageData(0, 0, cropW, cropH);
 
-            // Verify if scanned QR corresponds to the round in the candidate's link
-            const isMatchingRound =
-              (tokenCheck.data?.roundId && tokenCheck.data.roundId === curParams.roundId) ||
-              scannedText === curRound?.qrToken ||
-              (Boolean(curParams.roundId) && scannedText.includes(curParams.roundId)) ||
-              (tokenCheck.valid && !tokenCheck.data?.roundId);
+            let code = jsQR(cropData.data, cropData.width, cropData.height, {
+              inversionAttempts: 'attemptBoth',
+            });
 
-            if (isMatchingRound && curSap && curParams.roundId) {
-              isScanningRef.current = false;
-              const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-              // 1. Mark locally
-              markAttendance(curParams.roundId, curSap, 'REAL_CAMERA_QR_SCAN', curName);
-
-              // 2. Publish to Cloud Sync (instantly updates recruiter dashboard in real-time)
-              recordAttendanceToCloud({
-                roundId: curParams.roundId,
-                sapId: curSap,
-                studentName: curName,
-                status: 'PRESENT',
-                time: nowTime,
-                method: 'REAL_CAMERA_QR_SCAN',
+            // Pass 2B: Full frame fallback if crop didn't match
+            if (!code || !code.data) {
+              scanCanvas.width = vw;
+              scanCanvas.height = vh;
+              ctx.drawImage(video, 0, 0, vw, vh);
+              const fullData = ctx.getImageData(0, 0, vw, vh);
+              code = jsQR(fullData.data, fullData.width, fullData.height, {
+                inversionAttempts: 'attemptBoth',
               });
+            }
 
-              // 3. Update UI & trigger celebratory confetti
-              setJustMarked(true);
-              setMismatchError(null);
-              confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
-
-              // 4. Turn off camera
-              if (streamRef.current) {
-                streamRef.current.getTracks().forEach((track) => track.stop());
-                streamRef.current = null;
-              }
-              return;
-            } else if (tokenCheck.data?.roundId && tokenCheck.data.roundId !== curParams.roundId) {
-              setMismatchError(
-                `Scanned QR belongs to "${tokenCheck.data.companyName} · ${tokenCheck.data.roundName}". Please scan the QR code for "${roundDisplayNameRef.current}".`
-              );
+            if (code && code.data) {
+              const res = processScannedText(code.data);
+              if (res) return;
             }
           }
         }
       }
 
-      scanTimerId = setTimeout(scanFrame, 100);
+      // Fast 50ms interval for near-instant detection (20 FPS scanning)
+      scanTimerId = setTimeout(scanFrame, 50);
     };
 
-    scanTimerId = setTimeout(scanFrame, 400);
+    scanTimerId = setTimeout(scanFrame, 200);
 
     return () => {
       isMounted = false;

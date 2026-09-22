@@ -29,9 +29,6 @@ const IDB_NAME = 'upes_portal_master_db';
 const IDB_STORE = 'portal_collections';
 const IDB_VERSION = 1;
 
-const CLOUD_DB_TOPIC = 'upes_portal_master_db_v1';
-const CLOUD_DB_FALLBACK_URL = `https://ntfy.sh/${CLOUD_DB_TOPIC}`;
-
 function openIDB(): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
     if (typeof window === 'undefined' || !window.indexedDB) {
@@ -90,8 +87,47 @@ export async function saveToIDB<T>(key: string, value: T): Promise<void> {
   } catch {}
 }
 
+const CLOUD_CORE_TOPIC = 'upes_portal_core_data_v3';
+const CLOUD_ROSTER_TOPIC = 'upes_portal_roster_data_v3';
+const CLOUD_CORE_FALLBACK_URL = `https://ntfy.sh/${CLOUD_CORE_TOPIC}`;
+const CLOUD_ROSTER_FALLBACK_URL = `https://ntfy.sh/${CLOUD_ROSTER_TOPIC}`;
+
+async function fetchFromNtfyTopic(url: string): Promise<any | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2500);
+    const resp = await fetch(`${url}/json?poll=1&since=all`, {
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return null;
+    const text = await resp.text();
+    const lines = text.trim().split('\n').filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const item = JSON.parse(lines[i]);
+        if (item.event === 'message') {
+          if (item.message && item.message.startsWith('{')) {
+            try { return JSON.parse(item.message); } catch {}
+          }
+          if (item.attachment && item.attachment.url) {
+            try {
+              const attachResp = await fetch(item.attachment.url, { cache: 'no-store' });
+              if (attachResp.ok) return await attachResp.json();
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 /**
- * Fetches latest cloud database snapshot
+ * Fetches latest cloud database snapshot from /api/db or direct cloud topics
  */
 export async function fetchRemoteDatabase(): Promise<Partial<PortalDatabaseState> | null> {
   try {
@@ -106,34 +142,15 @@ export async function fetchRemoteDatabase(): Promise<Partial<PortalDatabaseState
       }
     } catch {}
 
-    // 2. Fallback to direct cloud topic
-    const resp = await fetch(`${CLOUD_DB_FALLBACK_URL}/json?poll=1&since=all`, {
-      headers: { 'Cache-Control': 'no-cache' },
-    });
-    if (resp.ok) {
-      const text = await resp.text();
-      const lines = text.trim().split('\n').filter(Boolean);
-      const messages = lines
-        .map((l) => {
-          try {
-            return JSON.parse(l);
-          } catch {
-            return null;
-          }
-        })
-        .filter((e) => e && e.event === 'message' && e.message)
-        .map((e) => {
-          try {
-            return JSON.parse(e.message);
-          } catch {
-            return null;
-          }
-        })
-        .filter((m) => m && typeof m === 'object');
+    // 2. Direct fallback to cloud topics if API unavailable
+    const coreData = await fetchFromNtfyTopic(CLOUD_CORE_FALLBACK_URL);
+    const rosterData = await fetchFromNtfyTopic(CLOUD_ROSTER_FALLBACK_URL);
 
-      if (messages.length > 0) {
-        return messages[messages.length - 1];
-      }
+    if (coreData || rosterData) {
+      return {
+        ...(coreData || {}),
+        ...(rosterData ? { roundStudents: rosterData.roundStudents } : {}),
+      };
     }
     return null;
   } catch (err) {
@@ -142,45 +159,103 @@ export async function fetchRemoteDatabase(): Promise<Partial<PortalDatabaseState
   }
 }
 
-// Debounce timer for saving to cloud
+// State accumulator to avoid race conditions when multiple useEffect hooks fire simultaneously
+let pendingRemoteState: Partial<PortalDatabaseState> = {};
 let saveTimeout: any = null;
 
+async function executeRemotePush(snapshotToSend: Partial<PortalDatabaseState>) {
+  try {
+    // 1. Post to local serverless API
+    let savedViaApi = false;
+    try {
+      const res = await fetch('/api/db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshotToSend),
+      });
+      if (res.ok) savedViaApi = true;
+    } catch {}
+
+    // 2. Direct fallback to cloud topics if serverless API isn't reachable
+    if (!savedViaApi) {
+      const now = new Date().toISOString();
+      if (
+        snapshotToSend.companies ||
+        snapshotToSend.drives ||
+        snapshotToSend.rounds ||
+        snapshotToSend.sprs ||
+        snapshotToSend.users
+      ) {
+        fetch(CLOUD_CORE_FALLBACK_URL, {
+          method: 'POST',
+          headers: {
+            Title: 'Portal Core DB Sync',
+            Tags: 'building',
+          },
+          body: JSON.stringify({
+            companies: snapshotToSend.companies,
+            drives: snapshotToSend.drives,
+            rounds: snapshotToSend.rounds,
+            sprs: snapshotToSend.sprs,
+            dutyAssignments: snapshotToSend.dutyAssignments,
+            users: snapshotToSend.users,
+            lastUpdated: now,
+          }),
+        }).catch(() => {});
+      }
+
+      if (snapshotToSend.roundStudents) {
+        fetch(CLOUD_ROSTER_FALLBACK_URL, {
+          method: 'POST',
+          headers: {
+            Title: 'Portal Roster Sync',
+            Tags: 'busts_in_silhouette',
+          },
+          body: JSON.stringify({
+            roundStudents: snapshotToSend.roundStudents,
+            lastUpdated: now,
+          }),
+        }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    console.warn('[PortalDB] Remote sync error:', err);
+  }
+}
+
 /**
- * Persists portal state to Cloud Database (debounced to prevent spam)
+ * Immediately pushes an update to cloud database without debounce delay.
+ * Used when creating/deleting companies, drives, or rounds to ensure instant multi-device sync.
+ */
+export async function pushImmediateToRemote(data: Partial<PortalDatabaseState>): Promise<void> {
+  Object.assign(pendingRemoteState, data);
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+  }
+  const toSend = { ...pendingRemoteState };
+  pendingRemoteState = {};
+  await executeRemotePush(toSend);
+}
+
+/**
+ * Persists portal state to Cloud Database with state accumulation.
+ * Accumulates rapid updates so no collection (e.g. companies, drives) is dropped.
  */
 export function persistToRemoteDatabase(data: Partial<PortalDatabaseState>): void {
+  // Accumulate pending changes
+  Object.assign(pendingRemoteState, data);
+
   if (saveTimeout) {
     clearTimeout(saveTimeout);
   }
 
   saveTimeout = setTimeout(async () => {
-    try {
-      // 1. Post to local serverless API
-      let savedViaApi = false;
-      try {
-        const res = await fetch('/api/db', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
-        if (res.ok) savedViaApi = true;
-      } catch {}
-
-      // 2. Direct fallback to cloud topic if API isn't hosted locally
-      if (!savedViaApi) {
-        await fetch(CLOUD_DB_FALLBACK_URL, {
-          method: 'POST',
-          headers: {
-            Title: 'Portal DB Sync',
-            Tags: 'database',
-          },
-          body: JSON.stringify({ ...data, lastUpdated: new Date().toISOString() }),
-        }).catch(() => {});
-      }
-    } catch (err) {
-      console.warn('[PortalDB] Remote sync error:', err);
-    }
-  }, 1000);
+    const toSend = { ...pendingRemoteState };
+    pendingRemoteState = {};
+    saveTimeout = null;
+    await executeRemotePush(toSend);
+  }, 500);
 }
 
 /**
