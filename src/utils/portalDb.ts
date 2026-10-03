@@ -9,6 +9,7 @@ import {
   Offer,
   AuditLog,
   Student,
+  SPRCycle,
 } from '../types';
 import { initialUsers, initialSPRs, initialStudents } from '../mock/mockData';
 
@@ -21,6 +22,7 @@ export interface PortalDatabaseState {
   students: Student[];
   sprs: SPR[];
   dutyAssignments?: SPRDutyAssignment[];
+  sprCycle?: SPRCycle;
   offers: Offer[];
   auditLogs: AuditLog[];
 }
@@ -332,10 +334,11 @@ export function sanitizeSPRs(sprList: SPR[]): SPR[] {
   if (hasDummy) {
     return initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }));
   }
-  // User explicitly requested: make every SPR duty 0
+  // Preserve authentic duties, cycle usage status, and unavailabilities
   return sprList.map((s) => ({
     ...s,
-    totalDuties: 0,
-    usedInCurrentCycle: false,
+    totalDuties: typeof s.totalDuties === 'number' ? s.totalDuties : 0,
+    usedInCurrentCycle: Boolean(s.usedInCurrentCycle),
+    unavailabilities: Array.isArray(s.unavailabilities) ? s.unavailabilities : [],
   }));
 }

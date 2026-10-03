@@ -203,7 +203,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const loadPermanentDatabase = async () => {
       try {
         // 1. Load from browser permanent IndexedDB
-        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs] = await Promise.all([
+        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs, idbDutyAssignments, idbSprCycle] = await Promise.all([
           getFromIDB<PortalUser[]>('users'),
           getFromIDB<Company[]>('companies'),
           getFromIDB<Drive[]>('drives'),
@@ -211,6 +211,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           getFromIDB<RoundStudent[]>('roundStudents'),
           getFromIDB<Student[]>('students'),
           getFromIDB<SPR[]>('sprs'),
+          getFromIDB<SPRDutyAssignment[]>('dutyAssignments'),
+          getFromIDB<SPRCycle>('sprCycle'),
         ]);
 
         if (!isMounted) return;
@@ -230,20 +232,16 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (idbStudents && idbStudents.length > 0) setStudents(idbStudents);
         if (idbUsers && idbUsers.length > 0) setUsers(sanitizeUsers(idbUsers));
         
-        // SPR Duty reset: Guarantee all SPR duties are 0 across system
+        // Preserve authentic SPR duties, duty assignments, and cycle tracking
         if (idbSprs && idbSprs.length > 0) {
           setSprs(sanitizeSPRs(idbSprs));
-        } else {
-          setSprs(initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false })));
         }
-        setDutyAssignments([]);
-        setSprCycle({
-          id: 1,
-          startedAt: new Date().toISOString().split('T')[0],
-          status: 'OPEN',
-          totalSprsInPool: 50,
-          usedSprCount: 0,
-        });
+        if (idbDutyAssignments && Array.isArray(idbDutyAssignments) && idbDutyAssignments.length > 0) {
+          setDutyAssignments(idbDutyAssignments);
+        }
+        if (idbSprCycle && typeof idbSprCycle === 'object' && typeof idbSprCycle.id === 'number') {
+          setSprCycle(idbSprCycle);
+        }
 
         // 2. Fetch and merge latest from Cloud Database (/api/db)
         const remoteData = await fetchRemoteDatabase();
@@ -306,8 +304,32 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
         }
 
+        if (Array.isArray(remoteData.dutyAssignments) && remoteData.dutyAssignments.length > 0) {
+          setDutyAssignments((prev) => {
+            const existingIds = new Set(prev.map((d) => d.id));
+            const toAdd = remoteData.dutyAssignments!.filter((d) => !existingIds.has(d.id));
+            return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+          });
+        }
+
         if (Array.isArray(remoteData.sprs) && remoteData.sprs.length > 0) {
-          setSprs((prev) => sanitizeSPRs(prev.length >= 50 ? prev : remoteData.sprs!));
+          setSprs((prev) => {
+            if (prev.length < 50) return sanitizeSPRs(remoteData.sprs!);
+            return prev;
+          });
+        }
+
+        if (remoteData.sprCycle && typeof remoteData.sprCycle === 'object' && typeof remoteData.sprCycle.id === 'number') {
+          const rCycle = remoteData.sprCycle;
+          setSprCycle((prev) => {
+            if (
+              rCycle.id > prev.id ||
+              (rCycle.id === prev.id && rCycle.usedSprCount > prev.usedSprCount)
+            ) {
+              return rCycle;
+            }
+            return prev;
+          });
         }
       } catch (err) {
         console.warn('[PortalDB] Init error:', err);
@@ -390,27 +412,24 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (saved) {
         const parsed: SPR[] = JSON.parse(saved);
         if (!isDummySprList(parsed)) {
-          // Force every SPR duty to 0 and unused in cycle as requested
-          return parsed.map((s) => ({
-            ...s,
-            totalDuties: 0,
-            usedInCurrentCycle: false,
-          }));
+          return sanitizeSPRs(parsed);
         }
       }
     } catch {}
-    try {
-      localStorage.setItem('upes_sprs', JSON.stringify(initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }))));
-    } catch {}
-    return initialSPRs.map((s) => ({ ...s, totalDuties: 0, usedInCurrentCycle: false }));
+    return initialSPRs;
   });
-  const [sprCycle, setSprCycle] = useState<SPRCycle>(() => ({
-    id: 1,
-    startedAt: new Date().toISOString().split('T')[0],
-    status: 'OPEN',
-    totalSprsInPool: 50,
-    usedSprCount: 0,
-  }));
+  const [sprCycle, setSprCycle] = useState<SPRCycle>(() => {
+    try {
+      const saved = localStorage.getItem('upes_spr_cycle');
+      if (saved) {
+        const parsed: SPRCycle = JSON.parse(saved);
+        if (parsed && typeof parsed.id === 'number') {
+          return parsed;
+        }
+      }
+    } catch {}
+    return initialSPRCycle;
+  });
   const [dutyAssignments, setDutyAssignments] = useState<SPRDutyAssignment[]>(() => {
     try {
       const saved = localStorage.getItem('upes_duty_assignments');
@@ -530,6 +549,14 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch {}
   }, [dutyAssignments]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(sprCycle));
+      saveToIDB('sprCycle', sprCycle);
+      persistToRemoteDatabase({ sprCycle });
+    } catch {}
+  }, [sprCycle]);
+
   // Automatically reconcile duty assignments and SPR duties whenever rounds change
   // Ensures that when any process or round is deleted, orphaned duties are pruned and SPR duty counts are reduced
   useEffect(() => {
@@ -543,7 +570,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return {
               ...s,
               totalDuties: activeCount,
-              usedInCurrentCycle: activeCount > 0,
+              usedInCurrentCycle: activeCount > 0 ? s.usedInCurrentCycle : false,
             };
           })
         );
@@ -1029,28 +1056,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         newRoundsCreated.push(createdRound);
         currentRoundsList = [createdRound, ...currentRoundsList];
 
-        // Update SPR pool duty counts and cycle usage
-        currentSprPool = currentSprPool.map((s) => {
-          const wasSelected = allocatedSprIds.includes(s.id);
-          const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
-          const updatedUsedInCycle = allocResult.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
-          return {
-            ...s,
-            totalDuties: updatedTotalDuties,
-            usedInCurrentCycle: updatedUsedInCycle,
-          };
-        });
-
-        // Advance cycle tracker
-        const newUsed = currentCycleState.usedSprCount + allocatedSprIds.length;
-        const isClosed = allocResult.cycleClosed;
-        currentCycleState = {
-          ...currentCycleState,
-          totalSprsInPool: currentSprPool.length,
-          usedSprCount: isClosed ? 0 : newUsed,
-          id: isClosed ? currentCycleState.id + 1 : currentCycleState.id,
-          status: isClosed ? 'OPEN' : currentCycleState.status,
-        };
+        // Update SPR pool duty counts and cycle usage strictly from allocation engine
+        currentSprPool = allocResult.updatedSprPool;
+        currentCycleState = allocResult.updatedCycle;
 
         // Note: Shortlist candidates are NOT auto-populated.
         // The round starts strictly with 0 candidates until the recruiter's Excel sheet is uploaded.
@@ -1058,14 +1066,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       setRounds(currentRoundsList);
       setSprs(currentSprPool);
-      setDutyAssignments((prev) => [...newDuties, ...prev]);
+      const combinedDuties = [...newDuties, ...dutyAssignments];
+      setDutyAssignments(combinedDuties);
       setSprCycle(currentCycleState);
 
       try {
         localStorage.setItem('upes_rounds', JSON.stringify(currentRoundsList));
         localStorage.setItem('upes_sprs', JSON.stringify(currentSprPool));
-        localStorage.setItem('upes_duty_assignments', JSON.stringify([...newDuties, ...dutyAssignments]));
+        localStorage.setItem('upes_duty_assignments', JSON.stringify(combinedDuties));
         localStorage.setItem('upes_spr_cycle', JSON.stringify(currentCycleState));
+        saveToIDB('rounds', currentRoundsList);
+        saveToIDB('sprs', currentSprPool);
+        saveToIDB('dutyAssignments', combinedDuties);
+        saveToIDB('sprCycle', currentCycleState);
       } catch {}
 
       // Immediately synchronize created company, drive, rounds, and SPR assignments across all devices
@@ -1074,7 +1087,8 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         drives: [newDrive, ...drives],
         rounds: currentRoundsList,
         sprs: currentSprPool,
-        dutyAssignments: [...newDuties, ...dutyAssignments],
+        dutyAssignments: combinedDuties,
+        sprCycle: currentCycleState,
       });
 
       addAuditLog(
@@ -1122,31 +1136,32 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     // Reduce duties by 1 per deleted duty assignment for all assigned SPRs
-    setSprs((prev) =>
-      prev.map((s) => {
-        const count = sprDutyReductions.get(s.id) || 0;
-        if (count > 0) {
-          const newTotal = Math.max(0, s.totalDuties - count);
-          return {
-            ...s,
-            totalDuties: newTotal,
-            usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
-          };
-        }
-        return s;
-      })
-    );
+    const nextSprs = sprs.map((s) => {
+      const count = sprDutyReductions.get(s.id) || 0;
+      if (count > 0) {
+        const newTotal = Math.max(0, s.totalDuties - count);
+        return {
+          ...s,
+          totalDuties: newTotal,
+          usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
+        };
+      }
+      return s;
+    });
+    setSprs(nextSprs);
 
     // Remove deleted duty assignments
-    setDutyAssignments((prev) =>
-      prev.filter((d) => !deletedRoundIds.has(d.roundId) && d.companyName !== compName)
+    const nextDuties = dutyAssignments.filter(
+      (d) => !deletedRoundIds.has(d.roundId) && d.companyName !== compName
     );
+    setDutyAssignments(nextDuties);
 
     // Adjust cycle count
-    setSprCycle((prev) => ({
-      ...prev,
-      usedSprCount: Math.max(0, prev.usedSprCount - dutiesToDelete.length),
-    }));
+    const nextCycle: SPRCycle = {
+      ...sprCycle,
+      usedSprCount: nextSprs.filter((s) => s.usedInCurrentCycle).length,
+    };
+    setSprCycle(nextCycle);
 
     // Remove company, drives, rounds, and associated round students
     const updatedCompanies = companies.filter((c) => c.id !== id);
@@ -1158,10 +1173,28 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setRounds(updatedRounds);
     setRoundStudents((prev) => prev.filter((rs) => !deletedRoundIds.has(rs.roundId) && !rs.roundId.includes(id)));
 
+    try {
+      localStorage.setItem('upes_companies', JSON.stringify(updatedCompanies));
+      localStorage.setItem('upes_drives', JSON.stringify(updatedDrives));
+      localStorage.setItem('upes_rounds', JSON.stringify(updatedRounds));
+      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+      saveToIDB('companies', updatedCompanies);
+      saveToIDB('drives', updatedDrives);
+      saveToIDB('rounds', updatedRounds);
+      saveToIDB('sprs', nextSprs);
+      saveToIDB('dutyAssignments', nextDuties);
+      saveToIDB('sprCycle', nextCycle);
+    } catch {}
+
     pushImmediateToRemote({
       companies: updatedCompanies,
       drives: updatedDrives,
       rounds: updatedRounds,
+      sprs: nextSprs,
+      dutyAssignments: nextDuties,
+      sprCycle: nextCycle,
     });
 
     addAuditLog('DELETE_COMPANY', `Deleted company process ${compName}, cleared rounds, and reduced assigned SPR duty counts.`);
@@ -1302,33 +1335,27 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     setRounds((prev) => [newRound, ...prev]);
 
-    // Save assigned SPR state & duty assignments
+    // Save assigned SPR state & duty assignments strictly from allocation engine
     if (allocatedSprIds.length > 0) {
-      setSprs((prev) =>
-        prev.map((s) => {
-          const wasSelected = allocatedSprIds.includes(s.id);
-          const updatedTotalDuties = wasSelected ? s.totalDuties + 1 : s.totalDuties;
-          const updatedUsedInCycle = allocResult.cycleClosed ? false : (wasSelected || s.usedInCurrentCycle);
-          return {
-            ...s,
-            totalDuties: updatedTotalDuties,
-            usedInCurrentCycle: updatedUsedInCycle,
-          };
-        })
-      );
+      setSprs(allocResult.updatedSprPool);
+      const combinedDuties = [...newDuties, ...dutyAssignments];
+      setDutyAssignments(combinedDuties);
+      setSprCycle(allocResult.updatedCycle);
 
-      setDutyAssignments((prev) => [...newDuties, ...prev]);
+      try {
+        localStorage.setItem('upes_sprs', JSON.stringify(allocResult.updatedSprPool));
+        localStorage.setItem('upes_duty_assignments', JSON.stringify(combinedDuties));
+        localStorage.setItem('upes_spr_cycle', JSON.stringify(allocResult.updatedCycle));
+        saveToIDB('sprs', allocResult.updatedSprPool);
+        saveToIDB('dutyAssignments', combinedDuties);
+        saveToIDB('sprCycle', allocResult.updatedCycle);
+      } catch {}
 
-      setSprCycle((prev) => {
-        const newUsed = prev.usedSprCount + allocatedSprIds.length;
-        const isClosed = allocResult.cycleClosed;
-        return {
-          ...prev,
-          totalSprsInPool: sprs.length,
-          usedSprCount: isClosed ? 0 : newUsed,
-          id: isClosed ? prev.id + 1 : prev.id,
-          status: isClosed ? 'OPEN' : prev.status,
-        };
+      pushImmediateToRemote({
+        rounds: [newRound, ...rounds],
+        sprs: allocResult.updatedSprPool,
+        dutyAssignments: combinedDuties,
+        sprCycle: allocResult.updatedCycle,
       });
     }
 
@@ -1431,20 +1458,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
 
     // Reduce duties by 1 for all assigned SPRs
-    setSprs((prev) =>
-      prev.map((s) => {
-        const count = sprDutyReductions.get(s.id) || 0;
-        if (count > 0) {
-          const newTotal = Math.max(0, s.totalDuties - count);
-          return {
-            ...s,
-            totalDuties: newTotal,
-            usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
-          };
-        }
-        return s;
-      })
-    );
+    const nextSprs = sprs.map((s) => {
+      const count = sprDutyReductions.get(s.id) || 0;
+      if (count > 0) {
+        const newTotal = Math.max(0, s.totalDuties - count);
+        return {
+          ...s,
+          totalDuties: newTotal,
+          usedInCurrentCycle: newTotal > 0 ? s.usedInCurrentCycle : false,
+        };
+      }
+      return s;
+    });
+    setSprs(nextSprs);
 
     // Remove the round
     const updatedRounds = rounds.filter((r) => r.id !== roundId);
@@ -1454,19 +1480,39 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     syncLiveAttendance(updatedRoundStudents, updatedRounds);
 
     // Remove associated duty assignments
-    setDutyAssignments((prev) => prev.filter((d) => d.roundId !== roundId));
+    const nextDuties = dutyAssignments.filter((d) => d.roundId !== roundId);
+    setDutyAssignments(nextDuties);
 
     // Adjust cycle tracker count
-    setSprCycle((prev) => ({
-      ...prev,
-      usedSprCount: Math.max(0, prev.usedSprCount - dutiesToDelete.length),
-    }));
+    const nextCycle: SPRCycle = {
+      ...sprCycle,
+      usedSprCount: nextSprs.filter((s) => s.usedInCurrentCycle).length,
+    };
+    setSprCycle(nextCycle);
 
     // Remove stored Excel buffer
     setOriginalExcelBuffers((prev) => {
       const next = new Map(prev);
       next.delete(roundId);
       return next;
+    });
+
+    try {
+      localStorage.setItem('upes_rounds', JSON.stringify(updatedRounds));
+      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+      saveToIDB('rounds', updatedRounds);
+      saveToIDB('sprs', nextSprs);
+      saveToIDB('dutyAssignments', nextDuties);
+      saveToIDB('sprCycle', nextCycle);
+    } catch {}
+
+    pushImmediateToRemote({
+      rounds: updatedRounds,
+      sprs: nextSprs,
+      dutyAssignments: nextDuties,
+      sprCycle: nextCycle,
     });
 
     addAuditLog('DELETE_ROUND', `Deleted round ${roundLabel}, cleared duties, and reduced assigned SPR duty counts by 1.`);
@@ -1702,39 +1748,29 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
     setRounds(nextRounds);
 
-    // Update SPRs usage and duty counts
-    const nextSprs = sprs.map((s) =>
-      selectedIds.includes(s.id)
-        ? {
-            ...s,
-            totalDuties: s.totalDuties + 1,
-            usedInCurrentCycle: true,
-          }
-        : s
-    );
-    setSprs(nextSprs);
-
+    // Update SPRs usage and duty counts strictly from engine result
+    setSprs(allocation.updatedSprPool);
     const nextDuties = [...newDuties, ...dutyAssignments];
     setDutyAssignments(nextDuties);
-
-    // Update cycle count
-    const newUsed = sprCycle.usedSprCount + selectedIds.length;
-    const isClosed = allocation.cycleClosed;
-    const nextCycle: SPRCycle = {
-      ...sprCycle,
-      totalSprsInPool: nextSprs.length,
-      usedSprCount: isClosed ? 0 : newUsed,
-      id: isClosed ? sprCycle.id + 1 : sprCycle.id,
-      status: isClosed ? 'OPEN' : sprCycle.status,
-    };
-    setSprCycle(nextCycle);
+    setSprCycle(allocation.updatedCycle);
 
     try {
       localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
-      localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_sprs', JSON.stringify(allocation.updatedSprPool));
       localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
-      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(allocation.updatedCycle));
+      saveToIDB('rounds', nextRounds);
+      saveToIDB('sprs', allocation.updatedSprPool);
+      saveToIDB('dutyAssignments', nextDuties);
+      saveToIDB('sprCycle', allocation.updatedCycle);
     } catch {}
+
+    pushImmediateToRemote({
+      rounds: nextRounds,
+      sprs: allocation.updatedSprPool,
+      dutyAssignments: nextDuties,
+      sprCycle: allocation.updatedCycle,
+    });
 
     addAuditLog(
       'AUTO_SPR_ALLOCATED',
@@ -1813,7 +1849,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
     setRounds(nextRounds);
 
-    const nextSprs = sprs.map((s) =>
+    let nextSprs = sprs.map((s) =>
       s.id === sprId
         ? {
             ...s,
@@ -1822,8 +1858,27 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           }
         : s
     );
-    setSprs(nextSprs);
 
+    // If manual assignment completes the cycle pool, advance cycle
+    const unusedCount = nextSprs.filter((s) => !s.usedInCurrentCycle).length;
+    let nextCycle = { ...sprCycle };
+    if (unusedCount === 0 && nextSprs.length > 0) {
+      nextCycle = {
+        ...nextCycle,
+        id: nextCycle.id + 1,
+        usedSprCount: 0,
+        status: 'OPEN',
+      };
+      nextSprs = nextSprs.map((s) => ({ ...s, usedInCurrentCycle: false }));
+    } else {
+      nextCycle = {
+        ...nextCycle,
+        usedSprCount: nextSprs.filter((s) => s.usedInCurrentCycle).length,
+      };
+    }
+
+    setSprs(nextSprs);
+    setSprCycle(nextCycle);
     const nextDuties = [newDuty, ...dutyAssignments];
     setDutyAssignments(nextDuties);
 
@@ -1831,7 +1886,19 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
       localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
       localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+      saveToIDB('rounds', nextRounds);
+      saveToIDB('sprs', nextSprs);
+      saveToIDB('dutyAssignments', nextDuties);
+      saveToIDB('sprCycle', nextCycle);
     } catch {}
+
+    pushImmediateToRemote({
+      rounds: nextRounds,
+      sprs: nextSprs,
+      dutyAssignments: nextDuties,
+      sprCycle: nextCycle,
+    });
 
     addAuditLog(
       'MANUAL_SPR_ASSIGNED',
@@ -1876,21 +1943,41 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
     setDutyAssignments(nextDuties);
 
+    const remainingActiveDuties = nextDuties.filter((d) => d.sprId === sprId).length;
     const nextSprs = sprs.map((s) =>
       s.id === sprId
         ? {
             ...s,
             totalDuties: Math.max(0, s.totalDuties - 1),
+            usedInCurrentCycle: remainingActiveDuties > 0 ? s.usedInCurrentCycle : false,
           }
         : s
     );
     setSprs(nextSprs);
 
+    const nextCycle: SPRCycle = {
+      ...sprCycle,
+      usedSprCount: nextSprs.filter((s) => s.usedInCurrentCycle).length,
+    };
+    setSprCycle(nextCycle);
+
     try {
       localStorage.setItem('upes_rounds', JSON.stringify(nextRounds));
       localStorage.setItem('upes_duty_assignments', JSON.stringify(nextDuties));
       localStorage.setItem('upes_sprs', JSON.stringify(nextSprs));
+      localStorage.setItem('upes_spr_cycle', JSON.stringify(nextCycle));
+      saveToIDB('rounds', nextRounds);
+      saveToIDB('dutyAssignments', nextDuties);
+      saveToIDB('sprs', nextSprs);
+      saveToIDB('sprCycle', nextCycle);
     } catch {}
+
+    pushImmediateToRemote({
+      rounds: nextRounds,
+      sprs: nextSprs,
+      dutyAssignments: nextDuties,
+      sprCycle: nextCycle,
+    });
 
     addAuditLog(
       'SPR_REMOVED',

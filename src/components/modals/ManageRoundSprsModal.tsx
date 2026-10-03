@@ -111,13 +111,13 @@ export const ManageRoundSprsModal: React.FC<ManageRoundSprsModalProps> = ({ roun
         };
       })
       .sort((a, b) => {
-        // Fewest duties first
-        if (a.spr.totalDuties !== b.spr.totalDuties) {
-          return a.spr.totalDuties - b.spr.totalDuties;
-        }
-        // Unused in cycle first
+        // Unused in cycle MUST come first - core fair cycle rule
         if (a.spr.usedInCurrentCycle !== b.spr.usedInCurrentCycle) {
           return a.spr.usedInCurrentCycle ? 1 : -1;
+        }
+        // Fewest total duties next
+        if (a.spr.totalDuties !== b.spr.totalDuties) {
+          return a.spr.totalDuties - b.spr.totalDuties;
         }
         return 0;
       });

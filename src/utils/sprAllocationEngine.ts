@@ -5,21 +5,34 @@ export interface AllocationDebugStep {
   sprName: string;
   status: 'QUALIFIED' | 'EXCLUDED_USED_IN_CYCLE' | 'EXCLUDED_UNAVAILABLE' | 'EXCLUDED_OVERLAP';
   reason: string;
-  score?: number;
 }
 
 /**
- * Fair SPR Allocation Engine
+ * Modern Fisher-Yates array shuffle for non-deterministic, completely fair random selection
+ */
+function shuffleArray<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/**
+ * Strict Cycle-Based Fair & Randomized SPR Allocation Engine
  * 
  * Rules:
- * 1. Date Conflict Prevention: If an SPR is already allotted to any process/round on the target date,
- *    do not allot them to any other process/round on that date.
- * 2. Duty Cycle & Balance:
- *    - Maintain cycle order where every SPR gets a duty before a second duty is assigned.
- *    - Prioritize SPRs with fewer total duties (totalDuties ascending).
- *    - If an SPR cannot be allotted on date X (conflict or shortage), allot the next available SPR,
- *      and prioritize the skipped SPR in the next process due to their lower duty count.
- * 3. Cycle Advancement: When all available SPRs have served in the cycle, advance cycle and reset flags.
+ * 1. Cycle Integrity: Every single SPR in the 50-member pool MUST be assigned exactly once in
+ *    the current cycle before anyone can be assigned a second duty in the next cycle.
+ * 2. Randomized Selection: Within the eligible pool for the cycle, candidates are chosen COMPLETELY
+ *    AT RANDOM. Names will never appear in a fixed alphabetical or sequential pattern.
+ * 3. Date Conflict & Availability:
+ *    - An SPR assigned to any round on the target date cannot be allotted again on that date.
+ *    - SPRs marked unavailable (Exam/Leave) on target date are skipped and retained for later rounds.
+ * 4. Automatic Cycle Wrap: If a round requires more SPRs than remain in the current cycle, the
+ *    engine finishes the current cycle, advances to the next cycle, and randomly selects the
+ *    remaining SPRs from the new cycle pool.
  */
 export function allocateSPRsForRound(
   round: Round,
@@ -31,140 +44,222 @@ export function allocateSPRsForRound(
   selectedSprs: SPR[];
   debugLog: AllocationDebugStep[];
   cycleClosed: boolean;
+  updatedSprPool: SPR[];
+  updatedCycle: SPRCycle;
 } {
   const debugLog: AllocationDebugStep[] = [];
   const targetDate = (round.date || '').trim();
 
-  const roundStartMs = round.startTime ? new Date(`${targetDate}T${round.startTime}`).getTime() : 0;
-  const roundEndMs = round.endTime ? new Date(`${targetDate}T${round.endTime}`).getTime() : 0;
+  // Helper to check if an SPR has a date conflict with any existing round
+  const hasConflictOnDate = (sprId: string): boolean => {
+    if (!targetDate) return false;
+    return existingRounds.some((r) => {
+      if (r.id === round.id || !r.assignedSprIds?.includes(sprId)) return false;
+      return Boolean(r.date && r.date.trim() === targetDate);
+    });
+  };
 
-  // Evaluate SPR eligibility
-  const evaluateSprs = (sprList: SPR[], allowUsedInCycle: boolean) => {
-    const eligible: { spr: SPR; originalIndex: number }[] = [];
+  // Helper to check if SPR is marked unavailable on targetDate
+  const isSelfUnavailable = (spr: SPR): boolean => {
+    if (!spr.unavailabilities || spr.unavailabilities.length === 0 || !targetDate) return false;
+    const rDate = new Date(targetDate).getTime();
+    if (isNaN(rDate)) return false;
+    return spr.unavailabilities.some((un) => {
+      const uFrom = new Date(un.fromDate).getTime();
+      const uTo = new Date(un.toDate).getTime();
+      if (isNaN(uFrom) || isNaN(uTo)) return false;
+      return rDate >= uFrom && rDate <= uTo;
+    });
+  };
 
-    sprList.forEach((spr, idx) => {
-      // 1. Cycle usage check
-      if (!allowUsedInCycle && spr.usedInCurrentCycle) {
-        debugLog.push({
-          sprId: spr.id,
-          sprName: spr.name,
-          status: 'EXCLUDED_USED_IN_CYCLE',
-          reason: `Already performed duty in Cycle #${currentCycle.id}`,
-        });
-        return;
-      }
-
-      // 2. Check explicit self-unavailability
-      const isUnavailable = spr.unavailabilities?.some((un) => {
-        const uFrom = new Date(un.fromDate).getTime();
-        const uTo = new Date(un.toDate).getTime();
-        const rDate = new Date(targetDate).getTime();
-        return rDate >= uFrom && rDate <= uTo;
-      });
-
-      if (isUnavailable) {
-        debugLog.push({
-          sprId: spr.id,
-          sprName: spr.name,
-          status: 'EXCLUDED_UNAVAILABLE',
-          reason: `Marked self as unavailable on calendar (Exam/Leave) on ${targetDate}`,
-        });
-        return;
-      }
-
-      // 3. Strict same-date conflict check across other processes & rounds
-      const hasDateConflict = existingRounds.some((r) => {
-        if (r.id === round.id || !r.assignedSprIds?.includes(spr.id)) return false;
-        
-        // Exact same date match -> STRICT CONFLICT: do not allot duty on same date
-        if (r.date && targetDate && r.date.trim() === targetDate) {
-          return true;
-        }
-
-        // Overlapping time window if dates overlap or match
-        if (roundStartMs && roundEndMs && r.startTime && r.endTime) {
-          const rStart = new Date(`${r.date}T${r.startTime}`).getTime();
-          const rEnd = new Date(`${r.date}T${r.endTime}`).getTime();
-          if (!isNaN(rStart) && !isNaN(rEnd) && !isNaN(roundStartMs) && !isNaN(roundEndMs)) {
-            return roundStartMs < rEnd && roundEndMs > rStart;
-          }
-        }
-
-        return false;
-      });
-
-      if (hasDateConflict) {
-        debugLog.push({
-          sprId: spr.id,
-          sprName: spr.name,
-          status: 'EXCLUDED_OVERLAP',
-          reason: `Already allotted to another placement process round on ${targetDate}`,
-        });
-        return;
-      }
-
-      eligible.push({ spr, originalIndex: idx });
+  // Check if an SPR is qualified on targetDate
+  const isAvailableOnDate = (spr: SPR): boolean => {
+    if (isSelfUnavailable(spr)) {
       debugLog.push({
         sprId: spr.id,
         sprName: spr.name,
-        status: 'QUALIFIED',
-        reason: `Eligible for duty on ${targetDate}. Total duties so far: ${spr.totalDuties}`,
+        status: 'EXCLUDED_UNAVAILABLE',
+        reason: `Marked self as unavailable on calendar on ${targetDate}`,
       });
-    });
-
-    return eligible;
+      return false;
+    }
+    if (hasConflictOnDate(spr.id)) {
+      debugLog.push({
+        sprId: spr.id,
+        sprName: spr.name,
+        status: 'EXCLUDED_OVERLAP',
+        reason: `Already assigned to another round on ${targetDate}`,
+      });
+      return false;
+    }
+    return true;
   };
 
-  // Sort eligible candidates by fairness:
-  // 1. SPRs with fewest totalDuties first (ascending)
-  // 2. Used in cycle status (unused first)
-  // 3. Original roster order (preserves orderly round-robin queue)
-  const sortCandidates = (items: { spr: SPR; originalIndex: number }[]) => {
-    return items.sort((a, b) => {
-      // Fewest duties first
-      if (a.spr.totalDuties !== b.spr.totalDuties) {
-        return a.spr.totalDuties - b.spr.totalDuties;
-      }
-      // Unused in cycle first
-      if (a.spr.usedInCurrentCycle !== b.spr.usedInCurrentCycle) {
-        return a.spr.usedInCurrentCycle ? 1 : -1;
-      }
-      // Stable roster order
-      return a.originalIndex - b.originalIndex;
+  // Group candidates by fewest total duties, then SHUFFLE randomly within each group
+  const sortAndRandomize = (candidates: SPR[]): SPR[] => {
+    const dutyMap = new Map<number, SPR[]>();
+    candidates.forEach((c) => {
+      const list = dutyMap.get(c.totalDuties) || [];
+      list.push(c);
+      dutyMap.set(c.totalDuties, list);
     });
+
+    const sortedDuties = Array.from(dutyMap.keys()).sort((a, b) => a - b);
+    const randomized: SPR[] = [];
+    sortedDuties.forEach((dutyCount) => {
+      const group = dutyMap.get(dutyCount)!;
+      randomized.push(...shuffleArray(group));
+    });
+    return randomized;
   };
 
-  // Pass 1: Try with SPRs unused in the current cycle
-  let eligiblePool = evaluateSprs(allSprs, false);
-  let sortedPool = sortCandidates(eligiblePool);
-
-  let selectedSprs = sortedPool.slice(0, countNeeded).map((item) => item.spr);
+  let workingPool = allSprs.map((s) => ({ ...s }));
+  let workingCycle = { ...currentCycle };
   let cycleClosed = false;
 
-  // Pass 2: If available unused SPRs in this cycle are fewer than needed,
-  // wrap/close the cycle and pick remaining from the remaining pool
-  if (selectedSprs.length < countNeeded && allSprs.length > selectedSprs.length) {
+  // 1. If all SPRs in current cycle have already been allotted, cycle is complete!
+  let unusedInCurrentCycle = workingPool.filter((s) => !s.usedInCurrentCycle);
+  if (unusedInCurrentCycle.length === 0 && workingPool.length > 0) {
     cycleClosed = true;
-    const remainingNeeded = countNeeded - selectedSprs.length;
-    const alreadySelectedIds = new Set(selectedSprs.map((s) => s.id));
-    const unselectedSprs = allSprs.filter((s) => !alreadySelectedIds.has(s.id));
-
-    const extraEligible = evaluateSprs(unselectedSprs, true);
-    const sortedExtra = sortCandidates(extraEligible);
-
-    const extraSelected = sortedExtra.slice(0, remainingNeeded).map((item) => item.spr);
-    selectedSprs = [...selectedSprs, ...extraSelected];
-  } else {
-    // Check if remaining eligible SPRs in current cycle are now 0
-    const remainingInCycle = allSprs.filter(
-      (s) => !s.usedInCurrentCycle && !selectedSprs.some((sel) => sel.id === s.id)
-    );
-    cycleClosed = remainingInCycle.length === 0;
+    workingCycle = {
+      ...workingCycle,
+      id: workingCycle.id + 1,
+      usedSprCount: 0,
+      status: 'OPEN',
+    };
+    workingPool = workingPool.map((s) => ({ ...s, usedInCurrentCycle: false }));
+    unusedInCurrentCycle = workingPool.filter((s) => !s.usedInCurrentCycle);
   }
+
+  // 2. Only candidates who have NOT been allotted in this cycle are eligible
+  const eligibleInCurrentCycle = unusedInCurrentCycle.filter(isAvailableOnDate);
+  const randomizedEligible = sortAndRandomize(eligibleInCurrentCycle);
+
+  let selectedSprs: SPR[] = [];
+
+  if (randomizedEligible.length >= countNeeded) {
+    // Case 1: Requirement fully satisfied by unserved SPRs in current cycle
+    selectedSprs = randomizedEligible.slice(0, countNeeded);
+
+    const selectedIds = new Set(selectedSprs.map((s) => s.id));
+    workingPool = workingPool.map((s) => {
+      if (selectedIds.has(s.id)) {
+        return {
+          ...s,
+          totalDuties: s.totalDuties + 1,
+          usedInCurrentCycle: true,
+        };
+      }
+      return s;
+    });
+
+    // Check if this allocation completed the entire pool for this cycle
+    const remainingUnused = workingPool.filter((s) => !s.usedInCurrentCycle);
+    if (remainingUnused.length === 0) {
+      cycleClosed = true;
+      workingCycle = {
+        ...workingCycle,
+        id: workingCycle.id + 1,
+        usedSprCount: 0,
+        status: 'OPEN',
+      };
+      workingPool = workingPool.map((s) => ({ ...s, usedInCurrentCycle: false }));
+    } else {
+      workingCycle.usedSprCount = workingPool.filter((s) => s.usedInCurrentCycle).length;
+    }
+  } else if (unusedInCurrentCycle.length <= countNeeded) {
+    // Case 2: Pool of unserved SPRs in current cycle is smaller than requirement (cycle wrap-around)
+    selectedSprs = [...randomizedEligible];
+    const firstBatchIds = new Set(selectedSprs.map((s) => s.id));
+
+    // Finish current cycle and advance
+    cycleClosed = true;
+    const nextCycleId = workingCycle.id + 1;
+
+    workingPool = workingPool.map((s) => {
+      const wasInFirstBatch = firstBatchIds.has(s.id);
+      return {
+        ...s,
+        totalDuties: wasInFirstBatch ? s.totalDuties + 1 : s.totalDuties,
+        usedInCurrentCycle: false, // reset for new cycle
+      };
+    });
+
+    workingCycle = {
+      ...workingCycle,
+      id: nextCycleId,
+      usedSprCount: 0,
+      status: 'OPEN',
+    };
+
+    const remainingNeeded = countNeeded - selectedSprs.length;
+
+    // Pick remaining needed from the new cycle pool (excluding those just picked in batch 1)
+    const freshCyclePool = workingPool.filter(
+      (s) => !firstBatchIds.has(s.id) && isAvailableOnDate(s)
+    );
+    const randomizedFresh = sortAndRandomize(freshCyclePool);
+    const secondBatch = randomizedFresh.slice(0, remainingNeeded);
+
+    const secondBatchIds = new Set(secondBatch.map((s) => s.id));
+    workingPool = workingPool.map((s) => {
+      if (secondBatchIds.has(s.id)) {
+        return {
+          ...s,
+          totalDuties: s.totalDuties + 1,
+          usedInCurrentCycle: true, // marked used in new cycle
+        };
+      }
+      return s;
+    });
+
+    workingCycle.usedSprCount = secondBatch.length;
+    selectedSprs = [...selectedSprs, ...secondBatch];
+  } else {
+    // Case 3: There ARE unserved SPRs in the current cycle, but some have conflicts on this specific date
+    // Take all eligible unserved SPRs available on this date
+    selectedSprs = [...randomizedEligible];
+    const selectedIds = new Set(selectedSprs.map((s) => s.id));
+
+    // Fill remaining from other available SPRs without resetting the cycle for unserved SPRs
+    const remainingNeeded = countNeeded - selectedSprs.length;
+    const otherAvailable = workingPool.filter(
+      (s) => !selectedIds.has(s.id) && isAvailableOnDate(s)
+    );
+    const randomizedOthers = sortAndRandomize(otherAvailable);
+    const fillIn = randomizedOthers.slice(0, remainingNeeded);
+    const fillInIds = new Set(fillIn.map((s) => s.id));
+
+    workingPool = workingPool.map((s) => {
+      if (selectedIds.has(s.id) || fillInIds.has(s.id)) {
+        return {
+          ...s,
+          totalDuties: s.totalDuties + 1,
+          usedInCurrentCycle: true,
+        };
+      }
+      return s;
+    });
+
+    workingCycle.usedSprCount = workingPool.filter((s) => s.usedInCurrentCycle).length;
+    selectedSprs = [...selectedSprs, ...fillIn];
+  }
+
+  // Record debug steps
+  selectedSprs.forEach((spr) => {
+    debugLog.push({
+      sprId: spr.id,
+      sprName: spr.name,
+      status: 'QUALIFIED',
+      reason: `Allocated for round on ${targetDate}. Total duties: ${spr.totalDuties}`,
+    });
+  });
 
   return {
     selectedSprs,
     debugLog,
     cycleClosed,
+    updatedSprPool: workingPool,
+    updatedCycle: workingCycle,
   };
 }

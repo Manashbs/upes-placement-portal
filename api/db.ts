@@ -19,6 +19,7 @@ const inMemoryDb: {
   rounds: any[];
   sprs: any[];
   dutyAssignments: any[];
+  sprCycle: any;
   users: any[];
   roundStudents: any[];
   lastUpdated: string;
@@ -28,6 +29,7 @@ const inMemoryDb: {
   rounds: [],
   sprs: [],
   dutyAssignments: [],
+  sprCycle: null,
   users: [],
   roundStudents: [],
   lastUpdated: new Date().toISOString(),
@@ -108,6 +110,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (Array.isArray(coreSnapshot.dutyAssignments)) {
             inMemoryDb.dutyAssignments = coreSnapshot.dutyAssignments;
           }
+          if (coreSnapshot.sprCycle && typeof coreSnapshot.sprCycle === 'object') {
+            inMemoryDb.sprCycle = coreSnapshot.sprCycle;
+          }
           if (Array.isArray(coreSnapshot.users) && coreSnapshot.users.length > 0) {
             inMemoryDb.users = coreSnapshot.users;
           }
@@ -156,6 +161,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (Array.isArray(payload.dutyAssignments)) {
         inMemoryDb.dutyAssignments = payload.dutyAssignments;
       }
+      if (payload.sprCycle && typeof payload.sprCycle === 'object') {
+        inMemoryDb.sprCycle = payload.sprCycle;
+      }
       if (Array.isArray(payload.users)) {
         inMemoryDb.users = payload.users;
       }
@@ -170,6 +178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         rounds: inMemoryDb.rounds,
         sprs: inMemoryDb.sprs,
         dutyAssignments: inMemoryDb.dutyAssignments,
+        sprCycle: inMemoryDb.sprCycle,
         users: inMemoryDb.users,
         lastUpdated: now,
       };
