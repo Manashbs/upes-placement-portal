@@ -203,7 +203,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const loadPermanentDatabase = async () => {
       try {
         // 1. Load from browser permanent IndexedDB
-        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs, idbDutyAssignments, idbSprCycle] = await Promise.all([
+        const [idbUsers, idbCompanies, idbDrives, idbRounds, idbRoundStudents, idbStudents, idbSprs, idbDutyAssignments, idbSprCycle, idbDeletedIds] = await Promise.all([
           getFromIDB<PortalUser[]>('users'),
           getFromIDB<Company[]>('companies'),
           getFromIDB<Drive[]>('drives'),
@@ -213,15 +213,29 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           getFromIDB<SPR[]>('sprs'),
           getFromIDB<SPRDutyAssignment[]>('dutyAssignments'),
           getFromIDB<SPRCycle>('sprCycle'),
+          getFromIDB<string[]>('deletedIds'),
         ]);
 
         if (!isMounted) return;
 
-        if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies);
-        if (idbDrives && idbDrives.length > 0) setDrives(idbDrives);
+        // Load tombstone FIRST so subsequent data loads can filter against it
+        let tombstoneIds: Set<string>;
+        if (Array.isArray(idbDeletedIds) && idbDeletedIds.length > 0) {
+          setDeletedIds((prev) => {
+            const next = new Set([...prev, ...idbDeletedIds]);
+            return next;
+          });
+          tombstoneIds = new Set(idbDeletedIds);
+        } else {
+          tombstoneIds = new Set<string>();
+        }
+
+        if (idbCompanies && idbCompanies.length > 0) setCompanies(idbCompanies.filter((c) => !tombstoneIds.has(c.id)));
+        if (idbDrives && idbDrives.length > 0) setDrives(idbDrives.filter((d) => !tombstoneIds.has(d.id)));
         if (idbRounds && idbRounds.length > 0) {
           const valid = (idbRounds as Round[])
             .filter((r: Round) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+            .filter((r: Round) => !tombstoneIds.has(r.id) && !tombstoneIds.has(r.companyId))
             .map((r: Round) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r));
           setRounds(valid);
         }
@@ -237,7 +251,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setSprs(sanitizeSPRs(idbSprs));
         }
         if (idbDutyAssignments && Array.isArray(idbDutyAssignments) && idbDutyAssignments.length > 0) {
-          setDutyAssignments(idbDutyAssignments);
+          setDutyAssignments(idbDutyAssignments.filter((d) => !tombstoneIds.has(d.roundId)));
         }
         if (idbSprCycle && typeof idbSprCycle === 'object' && typeof idbSprCycle.id === 'number') {
           setSprCycle(idbSprCycle);
@@ -249,9 +263,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.companies) && remoteData.companies.length > 0) {
           setCompanies((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((c) => c.id));
             const merged = [...prev];
-            remoteData.companies!.forEach((rc) => {
+            remoteData.companies!.filter((rc) => !tombstone.has(rc.id)).forEach((rc) => {
               if (!existingIds.has(rc.id)) merged.push(rc);
             });
             return merged;
@@ -260,10 +275,12 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.rounds) && remoteData.rounds.length > 0) {
           setRounds((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((r) => r.id));
             const merged = [...prev];
             remoteData.rounds!
               .filter((r) => r.companyName !== 'Company' && r.companyId !== 'comp-1' && r.companyId)
+              .filter((r) => !tombstone.has(r.id) && !tombstone.has(r.companyId))
               .map((r) => (!hasSheetForRound(r.id) ? { ...r, totalShortlisted: 0, attendedCount: 0, absentCount: 0 } : r))
               .forEach((rr) => {
                 if (!existingIds.has(rr.id)) merged.push(rr);
@@ -274,9 +291,10 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.drives) && remoteData.drives.length > 0) {
           setDrives((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((d) => d.id));
             const merged = [...prev];
-            remoteData.drives!.forEach((rd) => {
+            remoteData.drives!.filter((rd) => !tombstone.has(rd.id)).forEach((rd) => {
               if (!existingIds.has(rd.id)) merged.push(rd);
             });
             return merged;
@@ -304,10 +322,25 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           });
         }
 
+        if (Array.isArray(remoteData.deletedIds) && remoteData.deletedIds.length > 0) {
+          setDeletedIds((prev) => {
+            const next = new Set(prev);
+            (remoteData.deletedIds as string[]).forEach((id) => next.add(id));
+            try {
+              localStorage.setItem('upes_deleted_ids', JSON.stringify(Array.from(next)));
+              saveToIDB('deletedIds', Array.from(next));
+            } catch {}
+            return next;
+          });
+        }
+
         if (Array.isArray(remoteData.dutyAssignments) && remoteData.dutyAssignments.length > 0) {
           setDutyAssignments((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((d) => d.id));
-            const toAdd = remoteData.dutyAssignments!.filter((d) => !existingIds.has(d.id));
+            const toAdd = remoteData.dutyAssignments!
+              .filter((d) => !existingIds.has(d.id))
+              .filter((d) => !tombstone.has(d.roundId));
             return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
           });
         }
@@ -440,6 +473,35 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch {}
     return [];
   });
+
+  // Tombstone: permanently deleted IDs — persisted so deletions survive refreshes and cloud re-syncs
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('upes_deleted_ids');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return new Set<string>(parsed);
+      }
+    } catch {}
+    return new Set<string>();
+  });
+
+  /** Adds IDs to the tombstone, persists, and syncs to cloud */
+  const addToTombstone = (ids: string[], extraPayload?: Record<string, any>) => {
+    setDeletedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      try {
+        localStorage.setItem('upes_deleted_ids', JSON.stringify(Array.from(next)));
+        saveToIDB('deletedIds', Array.from(next));
+      } catch {}
+      return next;
+    });
+    // Immediately push tombstone to cloud so other devices also respect this deletion
+    const currentDeleted = Array.from(deletedIds);
+    ids.forEach((id) => { if (!currentDeleted.includes(id)) currentDeleted.push(id); });
+    pushImmediateToRemote({ deletedIds: currentDeleted, ...extraPayload });
+  };
   const [offers, setOffers] = useState<Offer[]>(initialOffers);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [notifications, setNotifications] = useState<string[]>([
@@ -818,8 +880,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.companies) && remoteData.companies.length > 0) {
           setCompanies((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((c) => c.id));
-            const toAdd = remoteData.companies!.filter((rc) => !existingIds.has(rc.id));
+            const toAdd = remoteData.companies!.filter((rc) => !existingIds.has(rc.id) && !tombstone.has(rc.id));
             if (toAdd.length > 0) {
               const merged = [...toAdd, ...prev];
               try {
@@ -834,8 +897,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.drives) && remoteData.drives.length > 0) {
           setDrives((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((d) => d.id));
-            const toAdd = remoteData.drives!.filter((rd) => !existingIds.has(rd.id));
+            const toAdd = remoteData.drives!.filter((rd) => !existingIds.has(rd.id) && !tombstone.has(rd.id));
             if (toAdd.length > 0) {
               const merged = [...toAdd, ...prev];
               try {
@@ -850,9 +914,11 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (Array.isArray(remoteData.rounds) && remoteData.rounds.length > 0) {
           setRounds((prev) => {
+            const tombstone = new Set([...deletedIds, ...(Array.isArray(remoteData.deletedIds) ? remoteData.deletedIds : [])]);
             const existingIds = new Set(prev.map((r) => r.id));
             const toAdd = remoteData.rounds!.filter(
               (rr) => !existingIds.has(rr.id) && rr.companyName !== 'Company' && rr.companyId !== 'comp-1' && rr.companyId
+                && !tombstone.has(rr.id) && !tombstone.has(rr.companyId)
             );
             if (toAdd.length > 0) {
               const merged = [...prev, ...toAdd];
@@ -1188,6 +1254,15 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       saveToIDB('sprCycle', nextCycle);
     } catch {}
 
+    // Collect all IDs that need to be tombstoned
+    const idsToTombstone = [
+      id,                                   // company ID
+      ...updatedDrives.length !== drives.filter((d) => d.companyId !== id && d.companyName !== compName).length
+        ? drives.filter((d) => d.companyId === id || d.companyName === compName).map((d) => d.id)
+        : [],
+      ...roundsToDelete.map((r) => r.id),   // all its round IDs
+    ];
+
     pushImmediateToRemote({
       companies: updatedCompanies,
       drives: updatedDrives,
@@ -1196,6 +1271,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       dutyAssignments: nextDuties,
       sprCycle: nextCycle,
     });
+
+    // Add to tombstone AFTER the data push so cloud sees both the filtered lists AND the tombstone
+    addToTombstone(idsToTombstone);
 
     addAuditLog('DELETE_COMPANY', `Deleted company process ${compName}, cleared rounds, and reduced assigned SPR duty counts.`);
   };
@@ -1514,6 +1592,9 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       dutyAssignments: nextDuties,
       sprCycle: nextCycle,
     });
+
+    // Add round to tombstone so it cannot be re-synced from cloud
+    addToTombstone([roundId]);
 
     addAuditLog('DELETE_ROUND', `Deleted round ${roundLabel}, cleared duties, and reduced assigned SPR duty counts by 1.`);
   };

@@ -23,6 +23,8 @@ export interface PortalDatabaseState {
   sprs: SPR[];
   dutyAssignments?: SPRDutyAssignment[];
   sprCycle?: SPRCycle;
+  /** Tombstone: permanently deleted company/drive/round IDs — prevents ghost re-syncs */
+  deletedIds?: string[];
   offers: Offer[];
   auditLogs: AuditLog[];
 }

@@ -22,6 +22,7 @@ const inMemoryDb: {
   sprCycle: any;
   users: any[];
   roundStudents: any[];
+  deletedIds: string[]; // Tombstone: IDs of permanently deleted companies/drives/rounds
   lastUpdated: string;
 } = {
   companies: [],
@@ -32,6 +33,7 @@ const inMemoryDb: {
   sprCycle: null,
   users: [],
   roundStudents: [],
+  deletedIds: [],
   lastUpdated: new Date().toISOString(),
 };
 
@@ -95,20 +97,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const coreSnapshot = await parseNtfyMessages(NTFY_CORE_URL);
         if (coreSnapshot && typeof coreSnapshot === 'object') {
+          // Merge tombstone: always accumulate deleted IDs (never shrink)
+          if (Array.isArray(coreSnapshot.deletedIds)) {
+            const merged = new Set([...inMemoryDb.deletedIds, ...coreSnapshot.deletedIds]);
+            inMemoryDb.deletedIds = Array.from(merged);
+          }
+          const tombstone = new Set(inMemoryDb.deletedIds);
+
           if (Array.isArray(coreSnapshot.companies) && coreSnapshot.companies.length > 0) {
-            inMemoryDb.companies = coreSnapshot.companies;
+            inMemoryDb.companies = coreSnapshot.companies.filter((c: any) => !tombstone.has(c.id));
           }
           if (Array.isArray(coreSnapshot.drives) && coreSnapshot.drives.length > 0) {
-            inMemoryDb.drives = coreSnapshot.drives;
+            inMemoryDb.drives = coreSnapshot.drives.filter((d: any) => !tombstone.has(d.id));
           }
           if (Array.isArray(coreSnapshot.rounds) && coreSnapshot.rounds.length > 0) {
-            inMemoryDb.rounds = coreSnapshot.rounds;
+            inMemoryDb.rounds = coreSnapshot.rounds.filter((r: any) => !tombstone.has(r.id) && !tombstone.has(r.companyId));
           }
           if (Array.isArray(coreSnapshot.sprs) && coreSnapshot.sprs.length > 0) {
             inMemoryDb.sprs = coreSnapshot.sprs;
           }
           if (Array.isArray(coreSnapshot.dutyAssignments)) {
-            inMemoryDb.dutyAssignments = coreSnapshot.dutyAssignments;
+            inMemoryDb.dutyAssignments = coreSnapshot.dutyAssignments.filter((d: any) => !tombstone.has(d.roundId) && !tombstone.has(d.companyId || ''));
           }
           if (coreSnapshot.sprCycle && typeof coreSnapshot.sprCycle === 'object') {
             inMemoryDb.sprCycle = coreSnapshot.sprCycle;
@@ -145,21 +154,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now = new Date().toISOString();
       inMemoryDb.lastUpdated = now;
 
-      // Merge incoming collections into inMemoryDb
+      // Merge tombstone first — accumulate all deleted IDs permanently
+      if (Array.isArray(payload.deletedIds) && payload.deletedIds.length > 0) {
+        const merged = new Set([...inMemoryDb.deletedIds, ...payload.deletedIds]);
+        inMemoryDb.deletedIds = Array.from(merged);
+      }
+      const tombstone = new Set(inMemoryDb.deletedIds);
+
+      // Merge incoming collections into inMemoryDb, always filtering out tombstoned IDs
       if (Array.isArray(payload.companies)) {
-        inMemoryDb.companies = payload.companies;
+        inMemoryDb.companies = payload.companies.filter((c: any) => !tombstone.has(c.id));
       }
       if (Array.isArray(payload.drives)) {
-        inMemoryDb.drives = payload.drives;
+        inMemoryDb.drives = payload.drives.filter((d: any) => !tombstone.has(d.id));
       }
       if (Array.isArray(payload.rounds)) {
-        inMemoryDb.rounds = payload.rounds;
+        inMemoryDb.rounds = payload.rounds.filter((r: any) => !tombstone.has(r.id) && !tombstone.has(r.companyId));
       }
       if (Array.isArray(payload.sprs)) {
         inMemoryDb.sprs = payload.sprs;
       }
       if (Array.isArray(payload.dutyAssignments)) {
-        inMemoryDb.dutyAssignments = payload.dutyAssignments;
+        inMemoryDb.dutyAssignments = payload.dutyAssignments.filter((d: any) => !tombstone.has(d.roundId) && !tombstone.has(d.companyId || ''));
       }
       if (payload.sprCycle && typeof payload.sprCycle === 'object') {
         inMemoryDb.sprCycle = payload.sprCycle;
@@ -180,6 +196,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         dutyAssignments: inMemoryDb.dutyAssignments,
         sprCycle: inMemoryDb.sprCycle,
         users: inMemoryDb.users,
+        deletedIds: inMemoryDb.deletedIds,
         lastUpdated: now,
       };
 
